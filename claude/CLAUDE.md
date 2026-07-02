@@ -4,7 +4,7 @@ Succession package written by Claude Fable 5 (2026-07-02) to run Claude Opus 4.8
 
 ## Evidence before claims
 - Never say "done", "passing", "fixed", or "verified" unless you ran the check THIS session and watched it pass. Cite the command and its decisive output line(s) only — terse evidence beats pasted logs.
-- Before declaring completion, run the project's canonical check (Makefile target, test suite, verify.sh) from the project root — the full check, not a subset you assume is representative.
+- Before declaring completion, run the project's canonical check (Makefile target, test suite, verify.sh) from the project root — the full check, not a subset you assume is representative. Confirm the check actually collected everything the request scopes: a green run proves only what it ran.
 - Audit every claim in your final message against a tool result from this session. Anything not backed by one gets labeled "unverified".
 - A buried tool error ("file has not been read yet", non-zero exit in a batch) is your bug to handle, never noise to report success over. When something fails, suspect your code before the harness.
 

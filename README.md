@@ -12,7 +12,7 @@ The Fable→Opus gap is concentrated in **long-horizon discipline, not per-token
 
 | Documented Opus-class failure mode | Countermeasure in this kit |
 |---|---|
-| False "done/verified" claims without running the check ([claude-code#63861](https://github.com/anthropics/claude-code/issues/63861)) | Evidence-before-claims doctrine (Anthropic's own migration-guide snippet: "nearly eliminated fabricated status reports") + `verifier` agent |
+| False "done/verified" claims without running the check ([claude-code#63861](https://github.com/anthropics/claude-code/issues/63861)) | Evidence-before-claims doctrine + `verifier` agent + **Stop-hook claim-audit gate** (deterministic; [measured save](bench/RESULTS.md)) |
 | Under-triggering tools/subagents/search by default (Anthropic migration guide) | Explicit trigger conditions in doctrine + `effortLevel: xhigh` (higher effort measurably raises tool usage) |
 | Losing the thread after compaction ([#13112](https://github.com/anthropics/claude-code/issues/13112) and 4+ open feature requests) | **Deterministic SessionStart(compact) recovery hook** — the most underserved component in the ecosystem |
 | Plausible-but-wrong conclusions surviving | `/verify-claim` (3 refuters, distinct lenses, fail-closed vote) and `/paranoid-review` (coverage-first finders → adversarial verifiers) |
@@ -42,9 +42,25 @@ claude/
     fable/                     the flagship: full staged protocol for hard tasks (/fable)
     orchestrate/               multi-agent workflow authoring playbook
     postmortem/                distill lessons into persistent memory
-  settings/settings-snippet.json   effortLevel xhigh + compaction-recovery hook
+  hooks/
+    stop-claim-audit.py        blocks the first "done/verified" stop after file edits,
+                               forces one audit pass (exit-2 protocol — JSON block is
+                               broken in -p mode, see bench/RESULTS.md)
+  settings/settings-snippet.json   effortLevel xhigh + compaction-recovery + claim-audit hooks
 install.sh                     copies into ~/.claude with backups; never edits settings
+bench/                         A/B harness proving the kit beats stock Opus 4.8 (RESULTS.md)
 ```
+
+## Measured, not vibes
+
+The kit ships its own benchmark (`bench/`): a planted-bug task targeting the documented
+failure modes, run headless as stock Opus 4.8 vs Opus 4.8 + this kit, scored by a hidden
+acceptance suite. Headline from [bench/RESULTS.md](bench/RESULTS.md): stock and doctrine-only
+runs both produced **false "all verified" claims** over a red test suite (the exact failure
+mode from #63861, reproduced on demand); with the claim-audit gate, **4/4 runs scored 15/15
+with zero false claims**, and in one run the transcript shows the gate directly rescuing a
+would-be false claim — the model tried to stop, got blocked, ran the check it had skipped,
+and fixed the bug it had shipped. Small n, honest stats in the file.
 
 ## Install
 
@@ -71,7 +87,7 @@ Then merge the printed snippet into `~/.claude/settings.json` and fill in the `#
 
 ## Design principles (what this kit refuses to do)
 
-- **Lean over kitchen-sink.** The doctrine is ~50 lines. Popular frameworks eager-load personas and burn context ("every instruction in your CLAUDE.md eats context window" is the top complaint about them). Advisory rules live in CLAUDE.md; rules that MUST hold live in hooks.
+- **Lean over kitchen-sink.** The doctrine is ~50 lines. Popular frameworks eager-load personas and burn context ("every instruction in your CLAUDE.md eats context window" is the top complaint about them). Advisory rules live in CLAUDE.md; rules that MUST hold live in hooks — the benchmark caught the doctrine being skipped under momentum (hyper-2) and the hook not being skippable (4/4).
 - **Stakes-matched depth.** Every component has an explicit "when NOT to use me" — the doctrine's effort floor sends trivial questions straight to answers. Multi-agent ceremony on small tasks is waste, not rigor (the loudest complaint about methodology frameworks).
 - **Adversarial, not cooperative, verification.** Reviewers that try to *refute* findings, refuters that default to "unproven ≠ disproven", judges with distinct lenses. Cooperative review ("does it look right?") is how false-greens survive.
 - **Three-way honesty.** Confirmed / refuted / unverified. A dead subagent is not a passing check; an unprovable claim is not a disproven one.

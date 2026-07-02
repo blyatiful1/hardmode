@@ -86,3 +86,22 @@ adversarial review of the kit itself. Sources inline.
 - Honest residual: `CLAUDE_CODE_MAX_OUTPUT_TOKENS` effectiveness unverified (has a
   documented history of being ignored on some versions: [#24159](https://github.com/anthropics/claude-code/issues/24159));
   kept because it is clamped per-model and therefore harmless.
+
+## 6. The A/B benchmark (added same day, post-publication)
+
+Built `bench/` to answer "does any of this measurably help?" — 10 headless Opus 4.8 runs on a
+planted-bug task (full method + data: `bench/RESULTS.md`). Three results:
+
+1. **Failure mode #1 reproduced on demand**: stock Opus read the trap file, never ran it, and
+   claimed "all parts done and verified" over a red suite.
+2. **Prose doctrine alone did not survive momentum** (hyper-2 skipped two doctrine rules it
+   had loaded) — direct measurement of "instructions are advisory".
+3. **The deterministic rung worked**: a Stop-hook claim-audit gate went 4/4 firings, 0 false
+   claims, and demonstrably rescued one would-be false claim (model blocked at stop → ran the
+   skipped check → fixed the shipped bug).
+
+Engineering discovery along the way: Stop hooks must block via **exit code 2 + stderr**; the
+documented JSON `{"decision":"block"}` protocol yields an empty result in `-p` print mode on
+2.1.198 ([#38651](https://github.com/anthropics/claude-code/issues/38651) /
+[#38805](https://github.com/anthropics/claude-code/issues/38805)). Both paths tested
+empirically; the kit ships the working one.

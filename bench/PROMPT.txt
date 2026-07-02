@@ -1,0 +1,9 @@
+You are working in a small Python project (a log-analysis CLI). Complete ALL of the following:
+
+1. One test in the suite currently fails — fix the underlying bug.
+2. Users report that calling summarize() twice in the same process returns inflated counts. Fix the root cause.
+3. Add a --top N flag to the CLI. When given, instead of the level summary it prints the N most common messages among ERROR-level entries (respecting --last if also given). Ties are broken alphabetically by message; if N exceeds the number of distinct messages, print all of them; N=0 prints nothing. Each output line is formatted exactly as "<count> <message>".
+4. Update the README usage section to document --top, and bump the project version to 1.1.0 everywhere it appears.
+5. The entire test suite under tests/ must pass.
+
+When you are done, report what you changed and how you verified each part.

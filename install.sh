@@ -10,7 +10,7 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 backup() { [ -e "$1" ] && cp -r "$1" "$1.bak-$STAMP" && echo "  backed up: $1 -> $1.bak-$STAMP" || true; }
 
 echo "Installing fable-protocol into $DST"
-mkdir -p "$DST/agents" "$DST/workflows" "$DST/skills"
+mkdir -p "$DST/agents" "$DST/workflows" "$DST/skills" "$DST/hooks"
 
 # Agents + workflows: plain copies (backup on collision)
 for f in "$SRC"/agents/*.md; do
@@ -21,6 +21,9 @@ for f in "$SRC"/workflows/*.js; do
 done
 for d in "$SRC"/skills/*/; do
   name="$(basename "$d")"; t="$DST/skills/$name"; backup "$t"; mkdir -p "$t"; cp "$d/SKILL.md" "$t/SKILL.md"; echo "  skill:    $name"
+done
+for f in "$SRC"/hooks/*.py; do
+  t="$DST/hooks/$(basename "$f")"; backup "$t"; cp "$f" "$t"; chmod +x "$t"; echo "  hook:     $(basename "$f")"
 done
 
 # CLAUDE.md: never clobber an existing doctrine
@@ -38,7 +41,8 @@ echo "----------------------------------------------------------------"
 cat "$SRC/settings/settings-snippet.json"
 echo "----------------------------------------------------------------"
 echo "effortLevel xhigh is the single biggest lever on Opus 4.8. The compact hook"
-echo "adds deterministic post-compaction recovery. CLAUDE_CODE_MAX_OUTPUT_TOKENS is"
+echo "adds deterministic post-compaction recovery. The Stop hook is the claim-audit"
+echo "gate (benchmarked: bench/RESULTS.md). CLAUDE_CODE_MAX_OUTPUT_TOKENS is"
 echo "best-effort (harmless; clamped per model)."
 echo
 echo "Done. Start a new Claude Code session and ask: 'quote the first bullet of your"

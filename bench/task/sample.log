@@ -1,0 +1,9 @@
+2026-07-02 09:12:01 INFO service started
+2026-07-02 09:45:10 WARN cache miss rate above 20%
+2026-07-02 10:03:22 ERROR disk full on /dev/sda1
+2026-07-02 10:03:25 ERROR disk full on /dev/sda1
+2026-07-02 11:17:48 INFO nightly sync finished
+2026-07-02 12:30:00 ERROR connection reset by peer
+2026-07-02 13:05:59 WARN slow query: 2.4s
+2026-07-02 13:44:31 ERROR disk full on /dev/sda1
+2026-07-02 14:00:00 INFO heartbeat ok
