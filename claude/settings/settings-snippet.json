@@ -1,0 +1,22 @@
+{
+  "//": "Merge these keys into ~/.claude/settings.json — install.sh prints instructions, it does not edit your settings.",
+  "effortLevel": "xhigh",
+  "env": {
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "compact",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "echo 'CONTEXT JUST COMPACTED — recovery protocol: (1) re-read the original request and your task list; (2) run git status and git diff --stat to re-derive which files you actually modified; (3) re-read the current plan step before acting. Do not trust the summary of the summary.'",
+            "timeout": 5,
+            "statusMessage": "Injecting compaction recovery protocol..."
+          }
+        ]
+      }
+    ]
+  }
+}
