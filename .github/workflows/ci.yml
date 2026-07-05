@@ -1,0 +1,59 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell scripts parse
+        run: bash -n install.sh bench/run.sh bench/task/verify.sh
+
+      - name: Python components compile
+        run: python3 -m py_compile claude/hooks/*.py bench/score.py bench/task/loglib/*.py
+
+      - name: Settings snippet is valid JSON
+        run: python3 -c "import json; json.load(open('claude/settings/settings-snippet.json'))"
+
+      - name: Workflow scripts compile
+        run: node tools/check-workflows.mjs
+
+      - name: Agents and skills have frontmatter
+        run: |
+          python3 - <<'EOF'
+          import sys
+          from pathlib import Path
+          bad = []
+          for f in [*Path('claude/agents').glob('*.md'), *Path('claude/skills').glob('*/SKILL.md')]:
+              text = f.read_text()
+              if not text.startswith('---') or 'name:' not in text or 'description:' not in text:
+                  bad.append(str(f))
+          if bad:
+              sys.exit(f"missing/incomplete frontmatter: {bad}")
+          print('frontmatter ok')
+          EOF
+
+      - name: Unit tests (hook + bench guards)
+        run: |
+          python3 -m pip -q install pytest
+          python3 -m pytest tests/ -q
+
+      - name: Install script end-to-end (twice, idempotent)
+        run: |
+          CLAUDE_DIR=/tmp/fake-claude ./install.sh > /dev/null
+          CLAUDE_DIR=/tmp/fake-claude ./install.sh | grep -q 'unchanged'
+          test -f /tmp/fake-claude/skills/fable/SKILL.md
+          # backups must never create loadable duplicates inside skills/
+          test "$(ls /tmp/fake-claude/skills | wc -l)" = "3"
+
+      - name: Bench anchor — pristine task scores 1/15
+        run: |
+          python3 -m venv /tmp/bench-venv
+          /tmp/bench-venv/bin/pip -q install pytest
+          cp -r bench/task /tmp/pristine-inst
+          total=$(/tmp/bench-venv/bin/python bench/score.py /tmp/pristine-inst /tmp/bench-venv/bin/python \
+            | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
+          test "$total" = "1" || { echo "pristine anchor drifted: scored $total/15, expected 1/15"; exit 1; }

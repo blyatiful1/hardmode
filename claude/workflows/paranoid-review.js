@@ -36,10 +36,14 @@ const FINDINGS = {
 const VERDICT = {
   type: 'object',
   properties: {
-    real: { type: 'boolean' },
-    reason: { type: 'string', description: 'Evidence from the actual code (or a run) that confirms or refutes' },
+    verdict: {
+      type: 'string',
+      enum: ['confirmed', 'refuted', 'unverifiable'],
+      description: 'confirmed = the code demonstrably has this problem; refuted = speculative or already handled; unverifiable = could not determine either way',
+    },
+    reason: { type: 'string', description: 'Evidence from the actual code (or a run) that decides it' },
   },
-  required: ['real', 'reason'],
+  required: ['verdict', 'reason'],
 }
 
 const DIMENSIONS = [
@@ -48,6 +52,12 @@ const DIMENSIONS = [
   ['regressions', 'behavior that used to work and this diff breaks; check the callers and consumers of every changed symbol'],
   ['security', 'injection, path traversal, unvalidated input at trust boundaries, secrets or credentials in code'],
 ]
+
+// Cross-dimension dedup: two finders often surface the same defect. First dimension
+// to reach Verify claims it; the JS event loop makes check-and-add atomic, so this is
+// safe without a barrier between stages.
+const seen = new Set()
+const dedupKey = f => `${f.file}:${f.line ?? (f.title || '').toLowerCase().slice(0, 50)}`
 
 phase('Find')
 const results = await pipeline(
@@ -59,23 +69,31 @@ Read the diff yourself with git, then read enough surrounding code to judge in c
 Report EVERY real issue you find regardless of severity — a separate verification step filters findings, you do not. Do not report style preferences.`,
     { label: `find:${key}`, phase: 'Find', schema: FINDINGS }
   ),
-  (r, [key]) => parallel((r?.findings ?? []).map(f => () =>
-    agent(
-      `Adversarially verify one code-review finding in the repository at the current working directory. Try to REFUTE it: read the actual code around it, and run it if cheap to do so.
+  (r, [key]) => {
+    const fresh = (r?.findings ?? []).filter(f => !seen.has(dedupKey(f)) && seen.add(dedupKey(f)))
+    const dupes = (r?.findings?.length ?? 0) - fresh.length
+    if (dupes) log(`find:${key}: ${dupes} duplicate finding(s) already claimed by another dimension`)
+    return parallel(fresh.map(f => () =>
+      agent(
+        `Adversarially verify one code-review finding in the repository at the current working directory. Try to REFUTE it: read the actual code around it, and run it if cheap to do so.
 Finding (${f.severity}) in ${f.file}${f.line ? ':' + f.line : ''}: ${f.title} — ${f.detail}
-Set real=true only if the code demonstrably has this problem; if the finding is speculative or the code already handles it, real=false.`,
-      { label: `verify:${(f.file || key).split('/').pop()}`, phase: 'Verify', schema: VERDICT }
-    ).then(v => ({ ...f, dimension: key, verdict: v }))
-  ))
+verdict=confirmed only if the code demonstrably has this problem; refuted if the finding is speculative or the code already handles it; unverifiable if you genuinely cannot determine either way.`,
+        { label: `verify:${(f.file || key).split('/').pop()}`, phase: 'Verify', schema: VERDICT }
+      ).then(v => ({ ...f, dimension: key, verdict: v }))
+    // A dead verifier is not a passing check: recover its finding as unverified.
+    )).then(judged => judged.map((j, i) => j ?? { ...fresh[i], dimension: key, verdict: null }))
+  }
 )
 
-const all = results.filter(Boolean).flat().filter(Boolean)
-const confirmed = all.filter(f => f.verdict?.real === true)
-const refuted = all.filter(f => f.verdict?.real === false)
-const unverified = all.filter(f => f.verdict == null)
+const SEVERITY_RANK = { critical: 0, major: 1, minor: 2 }
+const bySeverity = (a, b) => (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3)
+const all = results.filter(Boolean).flat()
+const confirmed = all.filter(f => f.verdict?.verdict === 'confirmed').sort(bySeverity)
+const refuted = all.filter(f => f.verdict?.verdict === 'refuted')
+const unverified = all.filter(f => !f.verdict || f.verdict.verdict === 'unverifiable').sort(bySeverity)
 log(`${confirmed.length} confirmed, ${refuted.length} refuted, ${unverified.length} unverified of ${all.length} findings`)
 return {
   confirmed: confirmed.map(({ verdict, ...f }) => ({ ...f, evidence: verdict.reason })),
   refuted: refuted.map(({ verdict, ...f }) => ({ ...f, refutation: verdict.reason })),
-  unverified: unverified.map(({ verdict, ...f }) => f),
+  unverified: unverified.map(({ verdict, ...f }) => ({ ...f, note: verdict?.reason ?? 'verifier did not return' })),
 }

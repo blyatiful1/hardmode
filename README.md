@@ -28,7 +28,7 @@ Full research with sources: [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ```
 claude/
-  CLAUDE.md                    global doctrine (~50 lines — lean by design)
+  CLAUDE.md                    global doctrine (~40 lines — lean by design)
   agents/
     verifier.md                adversarial post-implementation audit (fresh context, xhigh)
     plan-critic.md             attacks plans before code exists (xhigh)
@@ -43,12 +43,18 @@ claude/
     orchestrate/               multi-agent workflow authoring playbook
     postmortem/                distill lessons into persistent memory
   hooks/
-    stop-claim-audit.py        blocks the first "done/verified" stop after file edits,
-                               forces one audit pass (exit-2 protocol — JSON block is
-                               broken in -p mode, see bench/RESULTS.md)
+    stop-claim-audit.py        blocks the first "done/verified" stop after file edits
+                               (Edit/Write or file-writing Bash), forces one audit pass
+                               (exit-2 protocol — JSON block is broken in -p mode, see
+                               bench/RESULTS.md); negation-aware, fails open, unit-tested
   settings/settings-snippet.json   effortLevel xhigh + compaction-recovery + claim-audit hooks
-install.sh                     copies into ~/.claude with backups; never edits settings
+                               (the compact hook injects the ACTUAL git state, not just
+                               instructions to go look)
+install.sh                     copies into ~/.claude with out-of-tree backups; idempotent;
+                               never edits settings
 bench/                         A/B harness proving the kit beats stock Opus 4.8 (RESULTS.md)
+tests/                         unit tests for the hook + bench guards (run by CI)
+tools/check-workflows.mjs      syntax-checks the workflow scripts (CI)
 ```
 
 ## Measured, not vibes

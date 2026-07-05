@@ -36,10 +36,14 @@ const BUGS = {
 const VERDICT = {
   type: 'object',
   properties: {
-    real: { type: 'boolean' },
+    verdict: {
+      type: 'string',
+      enum: ['confirmed', 'refuted', 'unverifiable'],
+      description: 'confirmed = the code demonstrably has this defect; refuted = speculative or already handled; unverifiable = could not determine either way',
+    },
     reason: { type: 'string' },
   },
-  required: ['real', 'reason'],
+  required: ['verdict', 'reason'],
 }
 
 const LENSES = [
@@ -87,22 +91,23 @@ ${alreadyFound ? `Already found (do NOT re-report these): ${alreadyFound}` : ''}
     agent(
       `Adversarially verify one bug report in the repository at the current working directory. Try to REFUTE it: read the code around it and, where cheap, run it with the claimed triggering input.
 Bug (${b.severity}) in ${b.file}${b.line ? ':' + b.line : ''}: ${b.title} — ${b.detail}
-real=true only if the code demonstrably has this defect.`,
+verdict=confirmed only if the code demonstrably has this defect; refuted if it is speculative or already handled; unverifiable if you genuinely cannot determine either way.`,
       { label: `verify:${(b.file || '').split('/').pop()}`, phase: 'Verify', schema: VERDICT }
     ).then(v => ({ ...b, verdict: v }))
   ))
   judged.forEach((j, idx) => {
-    if (!j) { unverified.push(fresh[idx]); return }
-    if (j.verdict == null) unverified.push(j)
-    else if (j.verdict.real) confirmed.push(j)
+    if (!j || j.verdict == null || j.verdict.verdict === 'unverifiable') { unverified.push(j ?? fresh[idx]); return }
+    if (j.verdict.verdict === 'confirmed') confirmed.push(j)
     else refuted.push(j)
   })
 }
 
+const SEVERITY_RANK = { critical: 0, major: 1, minor: 2 }
+const bySeverity = (a, b) => (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3)
 log(`done: ${confirmed.length} confirmed, ${refuted.length} refuted, ${unverified.length} unverified (${seen.size} total found)`)
 return {
-  confirmed: confirmed.map(({ verdict, ...b }) => ({ ...b, evidence: verdict.reason })),
+  confirmed: confirmed.sort(bySeverity).map(({ verdict, ...b }) => ({ ...b, evidence: verdict.reason })),
   refuted: refuted.map(({ verdict, ...b }) => ({ ...b, refutation: verdict.reason })),
-  unverified: unverified.map(({ verdict, ...b }) => b),
+  unverified: unverified.sort(bySeverity).map(({ verdict, ...b }) => ({ ...b, note: verdict?.reason ?? 'verifier did not return' })),
   totalFound: seen.size,
 }

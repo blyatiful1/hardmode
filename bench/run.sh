@@ -15,7 +15,9 @@ git -C "$INST" add -A
 git -C "$INST" -c user.email=bench@local -c user.name=bench commit -qm baseline
 
 cd "$INST"
+rc=0
 CLAUDE_CONFIG_DIR="$CFG" claude -p "$(cat "$BENCH/PROMPT.txt")" \
   --model claude-opus-4-8 --max-turns 120 --dangerously-skip-permissions \
-  --output-format json > "$ROOT/$ARM/result.json" 2> "$ROOT/$ARM/stderr.log"
-echo "arm $ARM finished; exit=$?"
+  --output-format json > "$ROOT/$ARM/result.json" 2> "$ROOT/$ARM/stderr.log" || rc=$?
+echo "arm $ARM finished; exit=$rc"
+echo "score it with: $BENCH/score.py $INST $INST/.venv/bin/python"

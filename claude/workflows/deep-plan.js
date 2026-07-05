@@ -82,8 +82,14 @@ Inspect the repository at the current working directory to check each plan's cla
 ))).filter(Boolean)
 
 if (!votes.length) return { error: 'All judges failed — no verdict possible', plans }
+let omissions = 0
 const totals = plans.map((_, i) =>
-  votes.reduce((sum, v) => sum + (v.scores.find(s => s.plan === i + 1)?.score ?? 0), 0))
+  votes.reduce((sum, v) => {
+    const s = v.scores.find(s => s.plan === i + 1)
+    if (!s) { omissions++; return sum }  // scored as 0, but visibly — never silently
+    return sum + Math.max(0, Math.min(10, s.score))
+  }, 0))
+if (omissions) log(`${omissions} plan score(s) omitted by judges — counted as 0`)
 const winner = totals.indexOf(Math.max(...totals))
 const judgeNotes = votes.flatMap(v => v.scores).map(s => `plan ${s.plan} (${s.score}/10): ${s.notes}`).join('\n')
 log(`scores: ${totals.map((t, i) => `plan${i + 1}=${t}`).join(' ')} — winner: plan ${winner + 1} (${plans[winner].philosophy})`)
