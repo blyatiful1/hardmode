@@ -87,6 +87,34 @@ def test_sessions_are_isolated(tmp_path):
     assert fail_bash(tmp_path, "pytest -q", session="b").returncode == 0
 
 
+def test_threshold_env_lowers_trip_point(tmp_path):
+    # docs/SUCCESSION.md: smaller driver models set FABLE_LOOP_THRESHOLD=2.
+    env = {"FABLE_LOOP_THRESHOLD": "2"}
+    payload = {"session_id": "s1", "tool_name": "Bash",
+               "tool_input": {"command": "pytest -q"}, "tool_response": {"exit_code": 1}}
+    full_env = dict(os.environ, FABLE_STATE_DIR=str(tmp_path), **env)
+    first = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                           capture_output=True, text=True, timeout=30, env=full_env)
+    assert first.returncode == 0
+    second = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                            capture_output=True, text=True, timeout=30, env=full_env)
+    assert second.returncode == 2
+    assert "LOOP ALARM" in second.stderr
+
+
+def test_threshold_env_invalid_or_out_of_range_falls_back(tmp_path):
+    for i, bad in enumerate(("banana", "1", "0", "99", "")):
+        env = dict(os.environ, FABLE_STATE_DIR=str(tmp_path / f"state-{i}"),
+                   FABLE_LOOP_THRESHOLD=bad)
+        payload = {"session_id": "s1", "tool_name": "Bash",
+                   "tool_input": {"command": "make check"}, "tool_response": {"exit_code": 1}}
+        results = [subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                                  capture_output=True, text=True, timeout=30, env=env)
+                   for _ in range(3)]
+        # falls back to the default of 3: silent, silent, nudge
+        assert [r.returncode for r in results] == [0, 0, 2], bad
+
+
 def test_whitespace_variants_count_as_same_command(tmp_path):
     # "pytest  -q" and "pytest -q" are the same grind; normalization must merge them.
     fail_bash(tmp_path, "pytest -q")

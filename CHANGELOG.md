@@ -1,5 +1,39 @@
 # Changelog
 
+## v1.5 — 2026-07-06
+
+Succession pass — Fable 5's last change to this repo. The kit was built to run
+Opus 4.8 at Fable-grade discipline; this release makes it degrade gracefully onto
+*smaller* driver models (Sonnet/Haiku tiers), and writes down the judgment that
+until now lived only in weights. Organizing principle: as the model shrinks, move
+weight from advice to structure.
+
+### Added
+- **`docs/SUCCESSION.md`** — running the kit on smaller models: what breaks first
+  as the model shrinks (self-triggered verification, thread-keeping, grind
+  discipline, orchestration, diagnosis depth) and which kit component carries each;
+  per-tier configuration deltas; the asymmetric-verification principle (draft cheap,
+  verify strong — and when every tier is small, buy rigor with votes instead of
+  weights); `bench/` as the inheritance test; and the field notes — the
+  transferable priors for diagnosis, building, and calibration.
+- **Field notes in the oracle agent.** Eight hard-won diagnostic priors now live in
+  the oracle's prompt — read at the exact moment of need, by whatever model is
+  behind it ("when the bug makes no sense, one of the caller's assumptions is
+  false", "no reproducer, no diagnosis", "symptom location is rarely cause
+  location", ...).
+- **`FABLE_LOOP_THRESHOLD`** environment knob for the loop alarm (clamped 2–10,
+  default 3, invalid values fall back). Smaller models grind harder; on a
+  Sonnet/Haiku driver the second identical failure is already the signal.
+- **Doctrine: the escalation ladder now has a terminus.** When the oracle's next
+  experiment also dead-ends, the ladder ends at the human — with a decision-ready
+  summary (dead hypotheses, survivors, the next discriminating experiment) — never
+  a third lap of the same loop.
+- Docs-integrity tests: every relative markdown link in README/CHANGELOG/docs/bench
+  resolves; every knob SUCCESSION.md tells an heir to set exists in the code it
+  claims to configure; the oracle actually carries the field notes; all stateful
+  hooks honor the same `FABLE_STATE_DIR` override. Plus loop-threshold tests.
+  Suite: 87 → 93.
+
 ## v1.4 — 2026-07-06
 
 Coverage pass: the reward-hacking failure mode gets its own deterministic tripwire, the

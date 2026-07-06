@@ -5,7 +5,8 @@ Deterministic backstop for the grinding failure mode: the doctrine's "two failed
 fixes -> oracle" rule is advisory, and the benchmark showed advisory rules get
 skipped under momentum. This hook counts, per session, how many times the SAME
 Bash command has failed since the last file modification. On the 3rd identical
-failure it injects a one-time nudge (exit 2 -> stderr shown to the model;
+failure (configurable via FABLE_LOOP_THRESHOLD; use 2 on smaller driver
+models) it injects a one-time nudge (exit 2 -> stderr shown to the model;
 PostToolUse cannot block, the command already ran).
 
 Key design point: any file modification (Edit/Write/NotebookEdit, or a
@@ -24,9 +25,24 @@ import re
 import sys
 import time
 
-THRESHOLD = 3
+THRESHOLD_DEFAULT = 3
 MAX_TRACKED = 50
 STATE_TTL_DAYS = 7
+
+
+def threshold():
+    """FABLE_LOOP_THRESHOLD overrides the default (clamped 2..10).
+
+    Smaller models grind harder: on a Sonnet/Haiku driver set it to 2 —
+    the second identical failure is already the signal (docs/SUCCESSION.md).
+    """
+    try:
+        v = int(os.environ.get("FABLE_LOOP_THRESHOLD", ""))
+        if 2 <= v <= 10:
+            return v
+    except ValueError:
+        pass
+    return THRESHOLD_DEFAULT
 
 MODIFYING_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
 # Same conservative "this Bash command plausibly writes files" heuristic as the
@@ -129,7 +145,7 @@ def main():
 
     n = state["counts"].get(cmd, 0) + 1
     state["counts"][cmd] = n
-    if n >= THRESHOLD and cmd not in state["nudged"]:
+    if n >= threshold() and cmd not in state["nudged"]:
         state["nudged"].append(cmd)
         save_state(path, state)
         print(NUDGE.format(n=n), file=sys.stderr)

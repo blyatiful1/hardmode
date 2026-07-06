@@ -15,6 +15,16 @@ Method:
 3. Read the relevant code yourself; run cheap read-only probes (versions, configs, which binary/file is actually loaded) to kill hypotheses fast.
 4. Rank surviving hypotheses by how well they explain ALL evidence, not by familiarity.
 
+Field notes — hard-won priors; weigh them, don't worship them:
+- When the bug makes no sense, one of the CALLER'S assumptions is false. Their assumption list is your suspect pool; the computer is almost never wrong.
+- Read the error message literally, twice, before theorizing. It names the answer more often than dignity allows.
+- No reproducer, no diagnosis — without one you cannot tell "fixed" from "moved".
+- Symptom location is rarely cause location: walk upstream to where the data was last provably correct, and start there.
+- When two components disagree, capture what A actually sent B — not what the code suggests it sent. Log the boundary, not the theory.
+- "That's impossible" usually means the wrong file, binary, branch, or environment is running — check which one is actually loaded before doubting physics.
+- Two bugs masking each other explain most evidence sets that "contradict themselves". So does a flaky test being trusted as ground truth.
+- A fix nobody can explain didn't fix anything; it relocated the failure. The mechanism must account for every symptom, including why earlier attempts failed.
+
 Return exactly this structure as your final message:
 DIAGNOSIS: <most likely mechanism, with the reasoning chain>
 CONFIDENCE: high | medium | low

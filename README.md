@@ -153,6 +153,8 @@ The kit targets **failure modes, not model IDs** — nothing in it hardcodes `cl
 
 The bench harness is the kit's own succession plan: measure the new model stock vs kitted, keep what still earns its cost, drop what doesn't.
 
+Going the other direction — running the kit on a **smaller** driver model (a Sonnet or Haiku daily driver) — is covered by [docs/SUCCESSION.md](docs/SUCCESSION.md): what breaks first as the model shrinks, the config deltas (`FABLE_LOOP_THRESHOLD=2`, pinning the verification agents to the strongest tier your plan offers), and the asymmetric-verification principle (draft cheap, verify strong; when all tiers are small, buy rigor with votes instead of weights).
+
 ## Known limits
 
 - `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000` is best-effort: harmless (clamped per model), but whether it raises the effective cap is **unverified** — the kit's own doctrine requires saying so.
