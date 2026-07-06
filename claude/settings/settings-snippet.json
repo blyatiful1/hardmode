@@ -52,6 +52,16 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/posttool-test-weakening-alarm.py",
+            "timeout": 10
+          }
+        ]
       }
     ],
     "Stop": [

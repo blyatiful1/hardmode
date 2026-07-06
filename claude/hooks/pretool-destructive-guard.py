@@ -7,11 +7,13 @@ or `git checkout -- .` destroys hours of uncommitted work. This hook blocks
 operations, in two tiers:
 
   * working-tree destroyers (reset --hard, checkout --/-f/. , restore,
-    clean -f) — blocked ONLY when `git status --porcelain` shows uncommitted
-    or untracked work to lose; on a clean tree they pass untouched.
+    switch -f/--discard-changes, clean -f) — blocked ONLY when
+    `git status --porcelain` shows uncommitted or untracked work to lose;
+    on a clean tree they pass untouched.
   * always-dangerous ops — `git stash drop|clear` (discards saved work),
-    bare `git push --force` (use --force-with-lease), and `rm -rf` aimed at
-    catastrophic targets (/, ~, ., .., *) — blocked regardless of tree state.
+    bare force-push in either spelling (`--force`/`-f` or a `+refspec`;
+    use --force-with-lease), and `rm -rf` aimed at catastrophic targets
+    (/, ~, ., .., *) — blocked regardless of tree state.
 
 Escape hatch: after the USER explicitly approves the loss, re-run the command
 prefixed with FABLE_DESTRUCTIVE_OK=1. The model must never self-approve.
@@ -35,6 +37,8 @@ TREE_DESTROYERS = [
      "git checkout with --/-f/. overwrites uncommitted local modifications"),
     (re.compile(r"\bgit\b[^|;&]*\bclean\b[^|;&]*\s-[a-zA-Z]*f"),
      "git clean -f permanently deletes untracked files"),
+    (re.compile(r"\bgit\b[^|;&]*\bswitch\b[^|;&]*(?:\s-f\b|\s--force\b|\s--discard-changes\b)"),
+     "git switch -f/--discard-changes overwrites uncommitted local modifications"),
 ]
 RESTORE = re.compile(r"\bgit\b[^|;&]*\brestore\b([^|;&]*)")
 ALWAYS_DANGEROUS = [
@@ -47,7 +51,9 @@ ALWAYS_DANGEROUS = [
                 r"\s+(?:\"|')?(?:/(?:\*)?|~(?:/)?|\$HOME(?:/)?|\.\.?(?:/)?|\*)(?:\"|')?(?:\s|$|;)"),
      "recursive rm aimed at /, ~, ., .. or * is unrecoverable"),
 ]
-FORCE_PUSH = re.compile(r"\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|\s-f\b)")
+# --force / -f, plus the refspec spelling of force (`git push origin +main`) —
+# the leading + IS --force for that ref and evades a flag-only check.
+FORCE_PUSH = re.compile(r"\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|\s-f\b|\s\+[A-Za-z0-9_./:~^-])")
 FORCE_WITH_LEASE = re.compile(r"--force-with-lease\b")
 
 

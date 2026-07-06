@@ -78,6 +78,28 @@ def test_force_push_blocked_lease_allowed(tmp_path):
     assert run_hook("git push -u origin main", cwd=repo).returncode == 0
 
 
+def test_plus_refspec_force_push_blocked(tmp_path):
+    # `git push origin +main` IS a force-push — the + evades a flag-only check.
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("git push origin +main", cwd=repo).returncode == 2
+    assert run_hook("git push origin +refs/heads/main", cwd=repo).returncode == 2
+    assert run_hook("git push origin main", cwd=repo).returncode == 0
+    assert run_hook("git push origin HEAD:main", cwd=repo).returncode == 0
+
+
+def test_switch_discard_blocked_on_dirty_tree(tmp_path):
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook("git switch -f main", cwd=repo).returncode == 2
+    assert run_hook("git switch --discard-changes main", cwd=repo).returncode == 2
+    assert run_hook("git switch main", cwd=repo).returncode == 0
+    assert run_hook("git switch -c feature/x", cwd=repo).returncode == 0
+
+
+def test_switch_discard_allowed_on_clean_tree(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("git switch -f main", cwd=repo).returncode == 0
+
+
 def test_catastrophic_rm_blocked():
     for cmd in ("rm -rf /", "rm -rf /*", "rm -rf ~", "rm -rf .", "rm -rf ..",
                 "rm -rf *", "rm -r -f /", "rm -r .", "rm -Rf $HOME"):

@@ -98,6 +98,20 @@ def test_recovery_without_saved_task_still_prints_protocol(tmp_path):
     assert "original request" not in r.stdout
 
 
+def test_recovery_truncates_huge_git_status(tmp_path):
+    # A 500-file dirty tree must not flood the fresh post-compaction context.
+    saved(tmp_path).write_text("Fix the parser.")
+    repo = tmp_path / "repo"
+    repo.mkdir()
+    subprocess.run(["git", "init", "-q"], cwd=repo, check=True)
+    for i in range(60):
+        (repo / f"dirty-{i:03}.txt").write_text("x")
+    r = run(RECOVER, {"session_id": "s1", "cwd": str(repo)}, tmp_path)
+    assert r.returncode == 0
+    status_lines = [ln for ln in r.stdout.splitlines() if "dirty-" in ln]
+    assert 0 < len(status_lines) <= 30
+
+
 def test_recovery_malformed_stdin_fails_open(tmp_path):
     r = run(RECOVER, {}, tmp_path, raw_stdin="not json")
     assert r.returncode == 0

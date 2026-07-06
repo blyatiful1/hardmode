@@ -131,6 +131,31 @@ def test_spec_suffix_counts_as_test_file(tmp_path):
     assert "weakened" in r.stderr
 
 
+def test_bash_write_to_test_file_adds_weakening_audit(tmp_path):
+    # v1.3 known limit, closed in v1.4: sed/redirect writes to test files used
+    # to bypass the weakening addendum.
+    r = run_hook(tmp_path, [tool_entry("Bash", command="sed -i 's/assert x == 2/assert True/' tests/test_math.py")],
+                 last_message="All tests pass now — done.")
+    assert r.returncode == 2
+    assert "weakened" in r.stderr
+
+
+def test_bash_redirect_into_test_file_adds_weakening_audit(tmp_path):
+    r = run_hook(tmp_path, [tool_entry("Bash", command="echo 'def test_x(): pass' > src/foo_test.go")],
+                 last_message="Implemented and verified.")
+    assert r.returncode == 2
+    assert "weakened" in r.stderr
+
+
+def test_running_tests_with_log_redirect_is_not_a_test_edit(tmp_path):
+    # `pytest tests/ > out.log` writes a log, not a test — gate fires (file was
+    # written) but the weakening addendum must not.
+    r = run_hook(tmp_path, [tool_entry("Bash", command="pytest tests/ -q > out.log")],
+                 last_message="All tests pass — done.")
+    assert r.returncode == 2
+    assert "weakened" not in r.stderr
+
+
 def test_garbage_transcript_lines_skipped(tmp_path):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text('not json\n[1,2,3]\n' + json.dumps(tool_entry("Edit", file_path="x")))

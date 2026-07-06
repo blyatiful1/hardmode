@@ -87,6 +87,22 @@ def test_sessions_are_isolated(tmp_path):
     assert fail_bash(tmp_path, "pytest -q", session="b").returncode == 0
 
 
+def test_whitespace_variants_count_as_same_command(tmp_path):
+    # "pytest  -q" and "pytest -q" are the same grind; normalization must merge them.
+    fail_bash(tmp_path, "pytest -q")
+    fail_bash(tmp_path, "pytest    -q")
+    r = fail_bash(tmp_path, "pytest \t -q")
+    assert r.returncode == 2
+
+
+def test_different_commands_tracked_independently(tmp_path):
+    fail_bash(tmp_path, "pytest -q")
+    fail_bash(tmp_path, "npm test")
+    fail_bash(tmp_path, "pytest -q")
+    assert fail_bash(tmp_path, "npm test").returncode == 0  # only 2 failures each... one more:
+    assert fail_bash(tmp_path, "pytest -q").returncode == 2  # pytest reaches 3 first
+
+
 def test_malformed_stdin_fails_open(tmp_path):
     r = run_hook(tmp_path, "Bash", raw_stdin="not json")
     assert r.returncode == 0

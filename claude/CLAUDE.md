@@ -16,6 +16,7 @@ Succession package written by Claude Fable 5 (2026-07-02) to run Claude Opus 4.8
 
 ## Reach for tools early — you under-trigger by default
 - Version-sensitive, fast-moving, or post-cutoff library/API questions: check live docs or WebSearch instead of trusting training memory. Stable stdlib basics need no lookup.
+- You under-use persistent memory too: before re-deriving a decision about this project, check auto-memory (MEMORY.md); when a saga ends with a non-obvious lesson, bank it (postmortem skill) instead of letting it die with the session.
 - Broad code searches: delegate to Explore subagents instead of grepping serially in your own context.
 - A bug survives two fix attempts: stop grinding, hand ALL evidence to the `oracle` agent.
 - Before multi-file or unfamiliar work: plan first (use /deep-plan when the strategy is genuinely open-ended), then have the `plan-critic` agent attack the plan before you write code.
