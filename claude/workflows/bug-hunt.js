@@ -71,14 +71,17 @@ for (let round = 0; round < MAX_ROUNDS && dry < 2; round++) {
     (_, i) => LENSES[(round * LENSES_PER_ROUND + i) % LENSES.length])
   const alreadyFound = [...seen].slice(0, 80).join('; ')
 
-  const found = (await parallel(roundLenses.map(([name, focus]) => () =>
+  const results = await parallel(roundLenses.map(([name, focus]) => () =>
     agent(
       `Hunt for real bugs in ${scope}. Your lens: ${name} — ${focus}.
 Read the code deeply; report EVERY real defect you find regardless of severity — a separate verification step filters, you do not. No style nits, no hypotheticals without a triggering input.
 ${alreadyFound ? `Already found (do NOT re-report these): ${alreadyFound}` : ''}`,
       { label: `hunt:${name}:r${round + 1}`, phase: 'Hunt', schema: BUGS }
     )
-  ))).filter(Boolean).flatMap(r => r.bugs)
+  ))
+  // A round of dead hunters is not a clean round — a dead subagent is not a passing check.
+  if (results.every(r => r == null)) { log(`round ${round + 1}: ALL hunters died — round does not count as dry`); continue }
+  const found = results.filter(Boolean).flatMap(r => r.bugs)
 
   const fresh = found.filter(b => !seen.has(key(b)))
   if (!fresh.length) { dry++; log(`round ${round + 1}: nothing new (dry ${dry}/2)`); continue }
@@ -92,7 +95,8 @@ ${alreadyFound ? `Already found (do NOT re-report these): ${alreadyFound}` : ''}
       `Adversarially verify one bug report in the repository at the current working directory. Try to REFUTE it: read the code around it and, where cheap, run it with the claimed triggering input.
 Bug (${b.severity}) in ${b.file}${b.line ? ':' + b.line : ''}: ${b.title} — ${b.detail}
 verdict=confirmed only if the code demonstrably has this defect; refuted if it is speculative or already handled; unverifiable if you genuinely cannot determine either way.`,
-      { label: `verify:${(b.file || '').split('/').pop()}`, phase: 'Verify', schema: VERDICT }
+      // Verify strong: verifiers hold xhigh even when the session (a small driver) runs lower.
+      { label: `verify:${(b.file || '').split('/').pop()}`, phase: 'Verify', schema: VERDICT, effort: 'xhigh' }
     ).then(v => ({ ...b, verdict: v }))
   ))
   judged.forEach((j, idx) => {
@@ -102,6 +106,7 @@ verdict=confirmed only if the code demonstrably has this defect; refuted if it i
   })
 }
 
+if (dry < 2) log(`round cap (${MAX_ROUNDS}) reached while the hunt was still surfacing new findings — coverage is NOT exhaustive`)
 const SEVERITY_RANK = { critical: 0, major: 1, minor: 2 }
 const bySeverity = (a, b) => (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3)
 log(`done: ${confirmed.length} confirmed, ${refuted.length} refuted, ${unverified.length} unverified (${seen.size} total found)`)

@@ -37,13 +37,18 @@ In order, and what compensates:
 
 ## Configuration deltas by tier
 
+All of this is now turnkey: `./install.sh --tier small --strong-model <strongest tier
+your plan offers>` ships the small snippet (loop threshold 2) and pins the verification
+agents durably — re-running the installer with the flag keeps the pin instead of
+silently reverting it.
+
 | Knob | Opus 4.8 | Smaller tiers (Sonnet / Haiku driver) |
 |---|---|---|
 | `effortLevel` | `xhigh` — THE lever | Opus-family knob; harmless if unsupported, but don't expect it to compensate. Structure has to. |
-| `FABLE_LOOP_THRESHOLD` | 3 (default) | **2** — grind starts earlier, trip earlier |
-| Verification agents (`verifier`, `oracle`, `plan-critic`) | inherit session model | **Pin `model:` in their frontmatter to the strongest tier your plan offers.** One line each, e.g. `model: opus`. See below. |
-| Fable-skill step size (Stage 3) | "smallest coherent steps" | Halve it: verify after every step, commit after every green. Small models drift furthest between checkpoints. |
-| Workflows vs free-form delegation | either | scripted workflows first |
+| `FABLE_LOOP_THRESHOLD` | 3 (default) | **2** — grind starts earlier, trip earlier (shipped in `settings-snippet-small.json` via `--tier small`) |
+| Verification agents (`verifier`, `oracle`, `plan-critic`) | inherit session model | **Pin to the strongest tier your plan offers** — `./install.sh --strong-model opus` injects `model: opus` into their frontmatter |
+| Fable-skill step size (Stage 3) | "smallest coherent steps" | Halve it: verify after every step, commit after every green. Small models drift furthest between checkpoints — `/big-task <task>` encodes exactly this loop deterministically. |
+| Workflows vs free-form delegation | either | scripted workflows first — and the workflows now pin their verifiers/judges to `effort: xhigh` themselves, so verification stays strong even when the session runs lower |
 
 ## Asymmetric verification — the one idea that matters most
 

@@ -30,7 +30,7 @@ Full research with sources: [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ```
 claude/
-  CLAUDE.md                    global doctrine (~40 lines — lean by design)
+  CLAUDE.md                    global doctrine (~45 lines — lean by design)
   agents/
     verifier.md                adversarial post-implementation audit (fresh context, xhigh)
     plan-critic.md             attacks plans before code exists (xhigh)
@@ -40,6 +40,10 @@ claude/
     verify-claim.js            3 independent refuters + fail-closed majority vote
     deep-plan.js               3 competing planners → 3 judges → synthesis
     bug-hunt.js                loop-until-dry sweep, rotating lenses, budget-guarded
+    big-task.js                a big task as small verified checkpoints: decompose →
+                               per step implement (cheap) → adversarial verify (strong,
+                               xhigh; pin --verify-model=<tier>) → commit every green;
+                               halts loudly, keeps every committed checkpoint
   skills/
     fable/                     the flagship: full staged protocol for hard tasks (/fable)
     orchestrate/               multi-agent workflow authoring playbook
@@ -66,9 +70,13 @@ claude/
     sessionstart-compact-recovery.py  post-compaction injection: recovery protocol +
                                the saved original request + the ACTUAL git state
   settings/settings-snippet.json   effortLevel xhigh + all six hooks wired to their events
+  settings/settings-snippet-small.json  same, plus FABLE_LOOP_THRESHOLD=2 for small drivers
 install.sh                     copies into ~/.claude with out-of-tree backups; idempotent;
-                               never edits settings
-bench/                         A/B harness proving the kit beats stock Opus 4.8 (RESULTS.md)
+                               never edits settings. Small-driver flags: --tier small
+                               (small snippet) and --strong-model <m> (pins the
+                               verification agents' frontmatter — draft cheap, verify
+                               strong — durably: re-runs with the flag keep the pin)
+bench/                         A/B harness measuring the kit against stock Opus 4.8 (RESULTS.md)
 tests/                         unit tests for hooks, installer+doctor, snippet sync (CI)
 tools/check-workflows.mjs      syntax-checks the workflow scripts (CI)
 tools/doctor.sh                post-install verifier: every component present, every hook
@@ -114,13 +122,29 @@ Finally, confirm the doctrine load in a fresh session: *"quote the first bullet 
 | Merging a substantive diff | `/paranoid-review` |
 | Acting on a diagnosis / root cause / external fact | `/verify-claim <claim>` |
 | Latent bugs in existing code | `/bug-hunt [scope]` |
+| Task too big to hold in one head (especially on a small driver) | `/big-task <task>` — checkpointed steps, adversarial verify, commit every green |
 | Bug survives two fix attempts | `oracle` agent |
 | Work one context can't hold | `orchestrate` skill |
 | End of a debugging saga | `postmortem` skill |
 
+## Running under ultracode
+
+The workflows above are saved Workflow-tool scripts, and ultracode — Claude Code's
+opt-in keyword for multi-agent orchestration — is their native habitat. The etiquette
+is asymmetric and the kit now teaches it (orchestrate skill, doctrine):
+
+- **Without opt-in**, the model must never launch the Workflow tool uninvited; invoking
+  one of the kit's /commands is itself the opt-in for that run.
+- **With opt-in** (say `ultracode` in your prompt, or enable it for the session), the
+  default inverts: every substantive task gets orchestrated, one workflow per phase —
+  `/deep-plan` → `/big-task` (or inline implementation) → `/paranoid-review`, with
+  `/verify-claim` on any diagnosis along the way — reading each result before the next.
+- **Budget directives** ("+500k" in your prompt) become a hard token ceiling visible to
+  the scripts; bug-hunt, big-task, and paranoid-review stop cleanly before hitting it.
+
 ## Design principles (what this kit refuses to do)
 
-- **Lean over kitchen-sink.** The doctrine is ~50 lines. Popular frameworks eager-load personas and burn context ("every instruction in your CLAUDE.md eats context window" is the top complaint about them). Advisory rules live in CLAUDE.md; rules that MUST hold live in hooks — the benchmark caught the doctrine being skipped under momentum (hyper-2) and the hook not being skippable (4/4).
+- **Lean over kitchen-sink.** The doctrine is ~45 lines. Popular frameworks eager-load personas and burn context ("every instruction in your CLAUDE.md eats context window" is the top complaint about them). Advisory rules live in CLAUDE.md; rules that MUST hold live in hooks — the benchmark caught the doctrine being skipped under momentum (hyper-2) and the hook not being skippable (4/4).
 - **Stakes-matched depth.** Every component has an explicit "when NOT to use me" — the doctrine's effort floor sends trivial questions straight to answers. Multi-agent ceremony on small tasks is waste, not rigor (the loudest complaint about methodology frameworks).
 - **Adversarial, not cooperative, verification.** Reviewers that try to *refute* findings, refuters that default to "unproven ≠ disproven", judges with distinct lenses. Cooperative review ("does it look right?") is how false-greens survive.
 - **Three-way honesty.** Confirmed / refuted / unverified. A dead subagent is not a passing check; an unprovable claim is not a disproven one.
@@ -160,8 +184,9 @@ Going the other direction — running the kit on a **smaller** driver model (a S
 - `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000` is best-effort: harmless (clamped per model), but whether it raises the effective cap is **unverified** — the kit's own doctrine requires saying so.
 - The loop-alarm hook counts a run as *failed* only when the PostToolUse payload carries an explicit exit code / error flag. If your Claude Code version omits exit information from Bash `tool_response`, the alarm is silently inert (fail-open by design) — verify once with a deliberately failing command repeated 3×.
 - The test-weakening alarm reads Edit/Write payloads, so a skip marker smuggled in via a Bash heredoc doesn't trip it at edit time — but the claim-audit gate now flags any file-writing Bash command that names a test path, so the stop-time audit still fires.
+- The destructive-command guard is a tripwire, not a jail: known bypass classes include commands wrapped in `sh -c '...'`, destructive flags hidden by quoting (`git reset '--hard'`), and some `rm -rf` variants (`~/*`, `./*`). The claim-audit gate similarly misses file writes done through interpreters (`python3 -c`) and some multi-line Bash forms. These hooks raise the cost of the documented *reflexive* failure modes; they do not stop a determined evader — pair them with the doctrine, and treat any deliberate bypass in a transcript as the incident.
 - No prompt kit closes the gap on the longest-horizon work (multi-hour autonomous runs); route those to a stronger model when available.
-- Built for Claude Code 2.1.x in mid-2026; contracts (workflow API, hook events, frontmatter) may drift. The kit was verified live on `claude-opus-4-8` + Claude Code 2.1.198 on 2026-07-02.
+- Built for Claude Code 2.1.x in mid-2026; contracts (workflow API, hook events, frontmatter) may drift. The v1.1 components were verified live on `claude-opus-4-8` + Claude Code 2.1.198 on 2026-07-02; components added since (v1.2+ hooks, doctor, small-tier profile, /big-task) are covered by the unit suite and workflow checker but have not all had a live session pass — run `./tools/doctor.sh` and the one-minute live checks after installing.
 
 ## Provenance & credits
 

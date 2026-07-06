@@ -57,7 +57,9 @@ const DIMENSIONS = [
 // to reach Verify claims it; the JS event loop makes check-and-add atomic, so this is
 // safe without a barrier between stages.
 const seen = new Set()
-const dedupKey = f => `${f.file}:${f.line ?? (f.title || '').toLowerCase().slice(0, 50)}`
+// Key includes the title even when a line is present: two DIFFERENT findings at the
+// same file:line must not collide (the collision silently dropped the second one).
+const dedupKey = f => `${f.file}:${f.line ?? ''}:${(f.title || '').toLowerCase().slice(0, 50)}`
 
 phase('Find')
 const results = await pipeline(
@@ -70,6 +72,9 @@ Report EVERY real issue you find regardless of severity — a separate verificat
     { label: `find:${key}`, phase: 'Find', schema: FINDINGS }
   ),
   (r, [key]) => {
+    // A dead finder must be visible, not read as "dimension found nothing clean".
+    if (r == null) { log(`find:${key}: FINDER DIED — this dimension is UNREVIEWED`); return [] }
+    if (budget.total && budget.remaining() < 30_000) { log(`find:${key}: token budget nearly spent — findings reported UNVERIFIED`); return (r.findings ?? []).map(f => ({ ...f, dimension: key, verdict: null })) }
     const fresh = (r?.findings ?? []).filter(f => !seen.has(dedupKey(f)) && seen.add(dedupKey(f)))
     const dupes = (r?.findings?.length ?? 0) - fresh.length
     if (dupes) log(`find:${key}: ${dupes} duplicate finding(s) already claimed by another dimension`)
@@ -78,7 +83,8 @@ Report EVERY real issue you find regardless of severity — a separate verificat
         `Adversarially verify one code-review finding in the repository at the current working directory. Try to REFUTE it: read the actual code around it, and run it if cheap to do so.
 Finding (${f.severity}) in ${f.file}${f.line ? ':' + f.line : ''}: ${f.title} — ${f.detail}
 verdict=confirmed only if the code demonstrably has this problem; refuted if the finding is speculative or the code already handles it; unverifiable if you genuinely cannot determine either way.`,
-        { label: `verify:${(f.file || key).split('/').pop()}`, phase: 'Verify', schema: VERDICT }
+        // Verify strong: verifiers hold xhigh even when the session (a small driver) runs lower.
+        { label: `verify:${(f.file || key).split('/').pop()}`, phase: 'Verify', schema: VERDICT, effort: 'xhigh' }
       ).then(v => ({ ...f, dimension: key, verdict: v }))
     // A dead verifier is not a passing check: recover its finding as unverified.
     )).then(judged => judged.map((j, i) => j ?? { ...fresh[i], dimension: key, verdict: null }))

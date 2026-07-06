@@ -77,7 +77,8 @@ const votes = (await parallel(JUDGE_LENSES.map((lens, i) => () =>
 TASK: ${task}
 ${plansText}
 Inspect the repository at the current working directory to check each plan's claims before scoring. Score each plan 0-10 through your lens with decisive notes.`,
-    { label: `judge:${i + 1}`, phase: 'Judge', schema: SCORES }
+    // Judges are the verification layer of this workflow: hold xhigh regardless of session effort.
+    { label: `judge:${i + 1}`, phase: 'Judge', schema: SCORES, effort: 'xhigh' }
   )
 ))).filter(Boolean)
 
@@ -107,4 +108,12 @@ The winner is PLAN ${winner + 1}. Build the final plan on its spine, but graft i
   { label: 'synthesize', phase: 'Synthesize' }
 )
 
-return { finalPlan, scores: totals, winner: `plan ${winner + 1} (${plans[winner].philosophy})`, lostPlanners: PHILOSOPHIES.length - plans.length, lostJudges: JUDGE_LENSES.length - votes.length }
+// A dead synthesizer must not read as an empty plan — fall back loudly to the raw winner.
+if (finalPlan == null) log('synthesizer died — returning the winning plan unsynthesized; graft losing-plan ideas manually')
+return {
+  finalPlan: finalPlan ?? { error: 'synthesizer died — this is the WINNING RAW PLAN, not the synthesis', ...plans[winner] },
+  scores: totals,
+  winner: `plan ${winner + 1} (${plans[winner].philosophy})`,
+  lostPlanners: PHILOSOPHIES.length - plans.length,
+  lostJudges: JUDGE_LENSES.length - votes.length,
+}
