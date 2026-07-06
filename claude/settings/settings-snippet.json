@@ -5,15 +5,51 @@
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"
   },
   "hooks": {
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/precompact-save-task.py",
+            "timeout": 10,
+            "statusMessage": "Saving original request verbatim before compaction..."
+          }
+        ]
+      }
+    ],
     "SessionStart": [
       {
         "matcher": "compact",
         "hooks": [
           {
             "type": "command",
-            "command": "echo 'CONTEXT JUST COMPACTED — recovery protocol: (1) re-read the original request and your task list; (2) the ACTUAL current git state is injected below — trust it over your summary of which files you modified; (3) re-read the current plan step before acting. Do not trust the summary of the summary.'; echo; echo '--- actual git state (post-compaction, deterministic) ---'; git status --short 2>/dev/null | head -30; git diff --stat HEAD 2>/dev/null | tail -8",
+            "command": "python3 ~/.claude/hooks/sessionstart-compact-recovery.py",
             "timeout": 10,
-            "statusMessage": "Injecting compaction recovery protocol + git state..."
+            "statusMessage": "Injecting compaction recovery: protocol + original request + git state..."
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/pretool-destructive-guard.py",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/posttool-loop-alarm.py",
+            "timeout": 10
           }
         ]
       }

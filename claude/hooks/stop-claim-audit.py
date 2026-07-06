@@ -49,6 +49,21 @@ REASON = (
     "ran. Run whatever check is missing now, fix what it finds, then finish. If every "
     "claim is already backed, restate the decisive evidence in one line each and finish."
 )
+TEST_EDIT_ADDENDUM = (
+    " ALSO: this session edited test files. Confirm no test was weakened to force a "
+    "pass — a loosened assertion, deleted case, widened tolerance, or added skip is "
+    "not a fix. If a test's expectation was genuinely wrong, your final message must "
+    "say so explicitly and justify the new expectation."
+)
+# Paths that look like tests: tests//test dirs, __tests__/, spec/, test_*.py,
+# *_test.<ext>, *.test.<ext>, *.spec.<ext>. Conservative on purpose.
+TEST_PATH = re.compile(
+    r"(^|/)(tests?|__tests__|spec)(/|$)"
+    r"|(^|/)test_[^/]+$"
+    r"|_test\.[A-Za-z0-9]+$"
+    r"|\.(test|spec)\.[A-Za-z0-9]+$",
+    re.IGNORECASE,
+)
 
 
 def makes_claim(text):
@@ -61,6 +76,7 @@ def main():
         return 0  # already continuing because of this hook — let the session end
     last_text = data.get("last_assistant_message", "")
     modified = False
+    modified_tests = False
     with open(data["transcript_path"]) as f:
         for line in f:
             try:
@@ -82,6 +98,10 @@ def main():
                     name = block.get("name")
                     if name in MODIFYING_TOOLS:
                         modified = True
+                        inp = block.get("input")
+                        fp = inp.get("file_path", "") if isinstance(inp, dict) else ""
+                        if isinstance(fp, str) and TEST_PATH.search(fp):
+                            modified_tests = True
                     elif name == "Bash":
                         inp = block.get("input")
                         cmd = inp.get("command", "") if isinstance(inp, dict) else ""
@@ -90,7 +110,7 @@ def main():
             if texts and not data.get("last_assistant_message"):
                 last_text = "\n".join(texts)  # fallback for CLIs without the payload field
     if modified and makes_claim(last_text):
-        print(REASON, file=sys.stderr)
+        print(REASON + (TEST_EDIT_ADDENDUM if modified_tests else ""), file=sys.stderr)
         return 2
     return 0
 

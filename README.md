@@ -14,10 +14,12 @@ The Fable→Opus gap is concentrated in **long-horizon discipline, not per-token
 |---|---|
 | False "done/verified" claims without running the check ([claude-code#63861](https://github.com/anthropics/claude-code/issues/63861)) | Evidence-before-claims doctrine + `verifier` agent + **Stop-hook claim-audit gate** (deterministic; [measured save](bench/RESULTS.md)) |
 | Under-triggering tools/subagents/search by default (Anthropic migration guide) | Explicit trigger conditions in doctrine + `effortLevel: xhigh` (higher effort measurably raises tool usage) |
-| Losing the thread after compaction ([#13112](https://github.com/anthropics/claude-code/issues/13112) and 4+ open feature requests) | **Deterministic SessionStart(compact) recovery hook** — the most underserved component in the ecosystem |
+| Losing the thread after compaction ([#13112](https://github.com/anthropics/claude-code/issues/13112) and 4+ open feature requests) | **Deterministic compaction recovery** — a PreCompact hook saves the original request verbatim; the SessionStart(compact) hook injects it back plus the actual git state |
 | Plausible-but-wrong conclusions surviving | `/verify-claim` (3 refuters, distinct lenses, fail-closed vote) and `/paranoid-review` (coverage-first finders → adversarial verifiers) |
 | Review filters silently dropping findings (Anthropic prompting guide) | Coverage-first finder prompts + **three-way verdicts** (confirmed / refuted / unverified — nothing silently dropped) |
-| Grinding in overthinking/fix loops | Observable loop-detection rule + `oracle` agent escalation after 2 failed fixes |
+| Grinding in overthinking/fix loops | Observable loop-detection rule + `oracle` escalation + **deterministic loop-alarm hook** (3rd identical failing command with no file change in between → forced stop-and-reassess) |
+| Weakening tests to force a green run (reward hacking) | Doctrine rule + the claim-audit gate calls it out whenever test files were edited under a completion claim |
+| Destroying uncommitted work with reflexive `reset --hard`/`checkout --` | **Destructive-command guard hook** — blocks unrecoverable ops when work would be lost; user-approved override only |
 | Sycophancy undermining review | Anti-sycophancy calibration rules |
 
 The one knob that matters: on Opus 4.8, `effortLevel: "xhigh"` is THE lever (Anthropic: "more important for this model than any prior Opus"). The folklore knobs — `MAX_THINKING_TOKENS`, `alwaysThinkingEnabled` — are **inert** on adaptive-thinking models. Everything else has to be structural. That's this kit.
@@ -46,10 +48,20 @@ claude/
     stop-claim-audit.py        blocks the first "done/verified" stop after file edits
                                (Edit/Write or file-writing Bash), forces one audit pass
                                (exit-2 protocol — JSON block is broken in -p mode, see
-                               bench/RESULTS.md); negation-aware, fails open, unit-tested
-  settings/settings-snippet.json   effortLevel xhigh + compaction-recovery + claim-audit hooks
-                               (the compact hook injects the ACTUAL git state, not just
-                               instructions to go look)
+                               bench/RESULTS.md); flags possible test-weakening when test
+                               files were edited; negation-aware, fails open, unit-tested
+    posttool-loop-alarm.py     deterministic grind detector: the same command failing 3x
+                               with no file modification in between gets a one-time
+                               stop-and-reassess injection (route to oracle)
+    pretool-destructive-guard.py blocks reset --hard / checkout -- / restore / clean -f
+                               when uncommitted work would be lost; stash drop|clear,
+                               bare force-push, catastrophic rm -rf always; override
+                               requires explicit user approval (FABLE_DESTRUCTIVE_OK=1)
+    precompact-save-task.py    saves the original user request verbatim before every
+                               compaction (per-session state file)
+    sessionstart-compact-recovery.py  post-compaction injection: recovery protocol +
+                               the saved original request + the ACTUAL git state
+  settings/settings-snippet.json   effortLevel xhigh + all five hooks wired to their events
 install.sh                     copies into ~/.claude with out-of-tree backups; idempotent;
                                never edits settings
 bench/                         A/B harness proving the kit beats stock Opus 4.8 (RESULTS.md)
@@ -119,6 +131,8 @@ npx skills add juliusbrussee/caveman --skill caveman-commit -g -a claude-code -y
 ## Known limits
 
 - `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000` is best-effort: harmless (clamped per model), but whether it raises the effective cap is **unverified** — the kit's own doctrine requires saying so.
+- The loop-alarm hook counts a run as *failed* only when the PostToolUse payload carries an explicit exit code / error flag. If your Claude Code version omits exit information from Bash `tool_response`, the alarm is silently inert (fail-open by design) — verify once with a deliberately failing command repeated 3×.
+- The claim-audit gate's test-weakening addendum sees Edit/Write file paths, not Bash-redirect writes to test files — conservative on purpose.
 - No prompt kit closes the gap on the longest-horizon work (multi-hour autonomous runs); route those to a stronger model when available.
 - Built for Claude Code 2.1.x in mid-2026; contracts (workflow API, hook events, frontmatter) may drift. The kit was verified live on `claude-opus-4-8` + Claude Code 2.1.198 on 2026-07-02.
 

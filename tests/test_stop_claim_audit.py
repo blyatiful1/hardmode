@@ -110,6 +110,27 @@ def test_string_content_does_not_crash(tmp_path):
     assert r.returncode == 2
 
 
+def test_test_file_edit_adds_weakening_audit(tmp_path):
+    r = run_hook(tmp_path, [tool_entry("Edit", file_path="tests/test_parser.py")],
+                 last_message="All tests pass now — done.")
+    assert r.returncode == 2
+    assert "weakened" in r.stderr
+
+
+def test_non_test_edit_has_no_weakening_audit(tmp_path):
+    r = run_hook(tmp_path, [tool_entry("Edit", file_path="src/parser.py")],
+                 last_message="All tests pass now — done.")
+    assert r.returncode == 2
+    assert "weakened" not in r.stderr
+
+
+def test_spec_suffix_counts_as_test_file(tmp_path):
+    r = run_hook(tmp_path, [tool_entry("Write", file_path="src/auth.spec.ts")],
+                 last_message="Implemented and verified.")
+    assert r.returncode == 2
+    assert "weakened" in r.stderr
+
+
 def test_garbage_transcript_lines_skipped(tmp_path):
     transcript = tmp_path / "transcript.jsonl"
     transcript.write_text('not json\n[1,2,3]\n' + json.dumps(tool_entry("Edit", file_path="x")))
