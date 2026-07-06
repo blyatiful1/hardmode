@@ -1,5 +1,88 @@
 # Changelog
 
+## v1.5 — 2026-07-06
+
+Succession pass — Fable 5's last change to this repo. The kit was built to run
+Opus 4.8 at Fable-grade discipline; this release makes it degrade gracefully onto
+*smaller* driver models (Sonnet/Haiku tiers), and writes down the judgment that
+until now lived only in weights. Organizing principle: as the model shrinks, move
+weight from advice to structure.
+
+### Added
+- **`docs/SUCCESSION.md`** — running the kit on smaller models: what breaks first
+  as the model shrinks (self-triggered verification, thread-keeping, grind
+  discipline, orchestration, diagnosis depth) and which kit component carries each;
+  per-tier configuration deltas; the asymmetric-verification principle (draft cheap,
+  verify strong — and when every tier is small, buy rigor with votes instead of
+  weights); `bench/` as the inheritance test; and the field notes — the
+  transferable priors for diagnosis, building, and calibration.
+- **Field notes in the oracle agent.** Eight hard-won diagnostic priors now live in
+  the oracle's prompt — read at the exact moment of need, by whatever model is
+  behind it ("when the bug makes no sense, one of the caller's assumptions is
+  false", "no reproducer, no diagnosis", "symptom location is rarely cause
+  location", ...).
+- **`FABLE_LOOP_THRESHOLD`** environment knob for the loop alarm (clamped 2–10,
+  default 3, invalid values fall back). Smaller models grind harder; on a
+  Sonnet/Haiku driver the second identical failure is already the signal.
+- **Doctrine: the escalation ladder now has a terminus.** When the oracle's next
+  experiment also dead-ends, the ladder ends at the human — with a decision-ready
+  summary (dead hypotheses, survivors, the next discriminating experiment) — never
+  a third lap of the same loop.
+- Docs-integrity tests: every relative markdown link in README/CHANGELOG/docs/bench
+  resolves; every knob SUCCESSION.md tells an heir to set exists in the code it
+  claims to configure; the oracle actually carries the field notes; all stateful
+  hooks honor the same `FABLE_STATE_DIR` override. Plus loop-threshold tests.
+  Suite: 87 → 93.
+
+## v1.4 — 2026-07-06
+
+Coverage pass: the reward-hacking failure mode gets its own deterministic tripwire, the
+one manual install step gets a deterministic verifier, and two destructive-guard evasions
+close. Test suite grows 51 → 87 (installer+doctor end-to-end, settings-snippet sync
+guards, and regression cases for every new detection).
+
+### Added
+- **Test-weakening alarm (`posttool-test-weakening-alarm.py`, PostToolUse on
+  Edit/Write/MultiEdit).** The doctrine forbids greening a suite by skipping the test,
+  and the claim-audit gate asks about it at stop time — but both are downstream of the
+  edit. The alarm watches the edit itself: adding a skip/disable marker
+  (`@pytest.mark.skip/skipif/xfail`, `pytest.skip(`, `@unittest.skip*`, `it/test/
+  describe.skip`, `xit(`, `t.Skip(`, `#[ignore]`, `@Disabled`, `@Ignore`) to a
+  test file triggers a one-time-per-file revert-or-justify nudge. Only *added* markers
+  count — occurrences in the new text must exceed the old, so refactoring around an
+  existing skip stays silent. Fail-open, session-scoped state, TEST_PATH heuristic
+  kept in sync with the claim-audit gate by a test.
+- **`tools/doctor.sh` — post-install verifier.** The kit's weakest link was its one
+  manual step: a botched settings merge leaves every hook silently unwired and the
+  whole enforcement layer inert with zero symptoms. The doctor checks python3, every
+  shipped hook/agent/workflow/skill file, hook compilation, doctrine presence (and the
+  unmerged `CLAUDE.fable-protocol.md` case), settings.json validity + per-hook wiring +
+  `effortLevel`, and state-dir writability. Exit 1 on any FAIL; covered end-to-end by
+  tests (install → merge → doctor passes; each sabotage → doctor fails).
+- **"On models after Opus 4.8" README section.** The kit targets failure modes, not
+  model IDs; the section names the three assumptions most likely to break on a successor
+  model (effort-level semantics, hook payload contracts, which failure modes remain) and
+  points at `bench/` as the way to retire ceremony a stronger model no longer needs.
+- Doctrine bullet: you under-use persistent memory by default (per the migration
+  guide) — check auto-memory before re-deriving project decisions, bank non-obvious
+  lessons via postmortem.
+- Settings-snippet sync tests: every shipped hook is wired, every wired hook ships,
+  each to the right event; a hook added to `claude/hooks/` without snippet wiring now
+  fails CI instead of shipping inert.
+
+### Changed
+- **Claim-audit gate: Bash writes to test files now trigger the weakening addendum** —
+  closing the v1.3 known limit. A file-writing Bash command that names a test-looking
+  path (`sed -i ... tests/test_x.py`, `echo ... > foo_test.go`) counts as a test edit;
+  a bare test-dir token in a read-mostly command (`pytest tests/ > out.log`) does not.
+- **Destructive guard: two evasions closed.** `git push origin +main` (the refspec
+  spelling of force-push) is now blocked like `--force`; `git switch -f /
+  --discard-changes` (the modern porcelain for `checkout --`) joins the tree-destroyer
+  tier (blocked only when the tree is dirty; plain `git switch`/`-c` untouched).
+- Loop-alarm regression tests: whitespace-variant commands count as the same grind;
+  independent commands accumulate independently. Compaction-recovery test: a 60-file
+  dirty tree injects at most 30 status lines.
+
 ## v1.3 — 2026-07-06
 
 Structural pass: four advisory rules promoted to deterministic enforcement, closing the

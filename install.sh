@@ -82,7 +82,11 @@ echo "  PreCompact + SessionStart(compact)  save/inject the original request ver
 echo "               plus the actual git state after every compaction"
 echo "  PreToolUse   destructive-command guard (protects uncommitted work)"
 echo "  PostToolUse  loop alarm (3rd identical failing command -> stop and reassess)"
+echo "  PostToolUse  test-weakening alarm (skip/disable marker added to a test file)"
 echo "CLAUDE_CODE_MAX_OUTPUT_TOKENS is best-effort (harmless; clamped per model)."
+echo
+echo "After merging, verify the install deterministically:"
+echo "  ./tools/doctor.sh"
 echo
 echo "Done. Start a new Claude Code session and ask: 'quote the first bullet of your"
 echo "Evidence before claims doctrine' to confirm the load."

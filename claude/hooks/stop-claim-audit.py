@@ -70,6 +70,23 @@ def makes_claim(text):
     return bool(CLAIM.search(NEGATED.sub("", text)))
 
 
+def bash_touches_tests(cmd):
+    """True if a file-writing Bash command names a test-looking path anywhere.
+
+    Coarse on purpose: `sed -i ... tests/test_x.py`, `echo ... > foo_test.go`,
+    `mv a.py tests/b.py` all count. Read-only commands never reach here (the
+    caller gates on BASH_WRITE first). A BARE test-dir token (`pytest tests/
+    > out.log`) does not count — only tokens naming something inside one.
+    """
+    for token in re.split(r"[\s;|&<>()]+", cmd):
+        token = token.strip("'\"`")
+        if not token or re.fullmatch(r"\.?/?(tests?|__tests__|spec)/?", token, re.IGNORECASE):
+            continue
+        if TEST_PATH.search(token):
+            return True
+    return False
+
+
 def main():
     data = json.load(sys.stdin)
     if data.get("stop_hook_active"):
@@ -107,6 +124,8 @@ def main():
                         cmd = inp.get("command", "") if isinstance(inp, dict) else ""
                         if isinstance(cmd, str) and BASH_WRITE.search(cmd):
                             modified = True
+                            if bash_touches_tests(cmd):
+                                modified_tests = True
             if texts and not data.get("last_assistant_message"):
                 last_text = "\n".join(texts)  # fallback for CLIs without the payload field
     if modified and makes_claim(last_text):
