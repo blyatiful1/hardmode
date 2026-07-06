@@ -1,5 +1,49 @@
 # Changelog
 
+## v1.3 — 2026-07-06
+
+Structural pass: four advisory rules promoted to deterministic enforcement, closing the
+gaps where a documented failure mode still relied on the model choosing to follow prose.
+All new hooks are unit-tested (51 tests total) and fail open; none are A/B benchmarked
+yet — the bench measures the claim-audit gate only.
+
+### Added
+- **Loop-alarm hook (`posttool-loop-alarm.py`, PostToolUse).** The doctrine's
+  "two failed fixes → oracle" rule was advisory — the exact category the benchmark
+  showed gets skipped under momentum. The hook counts per-session failures of the SAME
+  command; any file modification resets the counts (retrying after a change is
+  legitimate iteration), interleaved read-only probes do not. On the 3rd identical
+  failure it injects a one-time stop-and-reassess directive. Conservative by design:
+  a run only counts as failed on an explicit exit code / error flag in the payload —
+  if your Claude Code build omits those, the alarm is inert rather than nagging.
+- **Destructive-command guard (`pretool-destructive-guard.py`, PreToolUse).** Blocks
+  `git reset --hard`, `git checkout --`/`-f`/`.`, worktree `git restore`, and
+  `git clean -f` when `git status --porcelain` shows uncommitted or untracked work to
+  lose (clean tree → untouched); blocks `git stash drop|clear`, bare `git push --force`
+  (use `--force-with-lease`), and recursive `rm` aimed at `/`, `~`, `.`, `..`, or `*`
+  unconditionally. Quote-aware: a commit message that merely *mentions* `reset --hard`
+  does not trip it. Override (`FABLE_DESTRUCTIVE_OK=1`) requires explicit user approval
+  per the doctrine.
+- **Original request survives compaction verbatim.** A new PreCompact hook
+  (`precompact-save-task.py`) saves the first user message (system-reminder tags
+  stripped, 4000-char cap) to a per-session state file; the SessionStart(compact) hook —
+  now `sessionstart-compact-recovery.py`, replacing v1.2's inline shell — injects it
+  back alongside the recovery protocol and the actual git state. The doctrine's #1
+  compaction rule ("preserve the original task statement verbatim") no longer depends
+  on the summarizer honoring an instruction.
+- Two doctrine bullets: never green a failing test by weakening it (say so explicitly
+  if a test's expectation was genuinely wrong), and checkpoint (`git stash push -u` /
+  WIP commit) before any destructive operation.
+
+### Changed
+- **The claim-audit gate now knows about test-weakening.** When the session edited test
+  files (tests//spec/__tests__ dirs, `test_*`, `*_test.*`, `*.test.*`, `*.spec.*`) and
+  the final message claims completion, the audit directive explicitly demands confirming
+  no assertion was loosened, case deleted, tolerance widened, or skip added — the
+  reward-hacking variant of the false-green failure mode, previously uncovered.
+- `install.sh` needs no changes for the new hooks (the `hooks/*.py` glob covers them);
+  its closing summary now describes the full five-hook set.
+
 ## v1.2 — 2026-07-05
 
 Hardening pass: an adversarial review of the kit by its own standards. The benchmark in
