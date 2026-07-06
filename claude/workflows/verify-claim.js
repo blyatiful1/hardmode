@@ -1,6 +1,6 @@
 export const meta = {
   name: 'verify-claim',
-  description: 'Adversarially test one claim: 3 independent refuters with distinct lenses (empirical, source, edge-case), majority vote',
+  description: 'Adversarially test one claim: 3 independent refuters with distinct lenses (empirical, source, edge-case), fail-closed majority vote',
   whenToUse: 'Invoke as /verify-claim <claim> before acting on a diagnosis, reporting a root cause, or relying on an environment/config/third-party fact. Not for fresh implementation diffs — hand those to the verifier agent instead.',
   phases: [{ title: 'Refute' }],
 }
@@ -11,10 +11,14 @@ if (!claim) return { error: 'Usage: /verify-claim <claim to test>' }
 const VERDICT = {
   type: 'object',
   properties: {
-    refuted: { type: 'boolean' },
+    verdict: {
+      type: 'string',
+      enum: ['refuted', 'withstood', 'unproven'],
+      description: 'refuted = concrete evidence the claim is false; withstood = you actively tried to break it and it held; unproven = honest effort could not decide either way',
+    },
     evidence: { type: 'string', description: 'The concrete command/file/scenario that decides it' },
   },
-  required: ['refuted', 'evidence'],
+  required: ['verdict', 'evidence'],
 }
 
 const LENSES = [
@@ -28,13 +32,23 @@ const votes = (await parallel(LENSES.map((lens, i) => () =>
   agent(
     `Try to REFUTE this claim ${lens}.
 Claim: "${claim}"
-Work in the current directory. Cite concrete evidence for your verdict. If after honest effort you cannot decide, set refuted=true and prefix your evidence with "UNPROVEN: " — unproven claims do not pass, but they are not disproven either.`,
+Work in the current directory. Cite concrete evidence for your verdict.
+verdict=refuted only with concrete evidence the claim is false; withstood only if you actively attacked it and it held; unproven if after honest effort you cannot decide — an unproven claim does not pass, but it is not disproven either.`,
     { label: `refute:${i + 1}`, schema: VERDICT }
   )
-))).filter(Boolean)
+// A dead refuter is not a passing vote — count it as unproven, fail closed.
+))).map((v, i) => ({
+  lens: LENSES[i].split(' — ')[0],
+  verdict: v?.verdict ?? 'unproven',
+  evidence: v?.evidence ?? 'refuter did not return',
+}))
 
-const lost = LENSES.length - votes.length
-const passed = votes.filter(v => !v.refuted).length
-const survives = passed >= 2
-log(`${passed}/${votes.length} refuters could not break the claim${lost ? `; ${lost} refuter(s) did not return — treated as failed` : ''}`)
-return { claim, survives, votes, lostRefuters: lost }
+const count = verdict => votes.filter(v => v.verdict === verdict).length
+const survives = count('withstood') >= 2 && count('refuted') === 0
+log(`withstood ${count('withstood')}, refuted ${count('refuted')}, unproven ${count('unproven')} — claim ${survives ? 'SURVIVES' : 'DOES NOT SURVIVE'}`)
+return {
+  claim,
+  survives,
+  counts: { withstood: count('withstood'), refuted: count('refuted'), unproven: count('unproven') },
+  votes,
+}
