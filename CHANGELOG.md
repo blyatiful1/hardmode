@@ -1,5 +1,47 @@
 # Changelog
 
+## v1.6 — 2026-07-06
+
+Structure pass: SUCCESSION.md's advice becomes shipped mechanism, and the kit learns
+its native habitat — ultracode. Driven by a 9-auditor / adversarial-verify workflow
+run over the whole repo (the kit reviewed the way the kit reviews).
+
+### Added
+- **`/big-task` workflow** (`claude/workflows/big-task.js`) — the mission statement as
+  deterministic code: decompose a big task into independently verifiable, committable
+  steps (with a plan-critique round), then per step implement → adversarially verify
+  in a fresh context (xhigh; optionally `--verify-model=<tier>` pins verifiers to a
+  stronger model) → one repair round → commit the checkpoint. Halts loudly after two
+  rejected attempts, keeping every green checkpoint committed; ends with a
+  completeness critic auditing the commits against the ORIGINAL request, not the plan.
+- **Turnkey small-driver install**: `./install.sh --tier small` prints the new
+  `settings-snippet-small.json` (base snippet + `FABLE_LOOP_THRESHOLD=2`), and
+  `--strong-model <m>` durably pins the verification agents' frontmatter (idempotent:
+  re-runs with the flag keep the pin instead of silently reverting it, closing a
+  SUCCESSION.md drift). `tests/test_small_tier.py` covers snippet sync, pinning,
+  idempotency, and flag errors.
+- **Ultracode compatibility**: the orchestrate skill now teaches the opt-in rule
+  (never launch the Workflow tool uninvited; a user-invoked /command is the opt-in for
+  that run), the budget-directive API (`budget.total` guards — without one, loops run
+  to the agent cap), `workflow()` composition, and effort/model tiering; the doctrine
+  gets the one-bullet version; the README documents the phase-chaining loop
+  (`/deep-plan` → `/big-task` → `/paranoid-review`). The fable skill gains a
+  no-Workflow-tool fallback (degrade the machinery, never the rigor).
+
+### Changed
+- **Asymmetric verification is now encoded, not advised**: every verifier, refuter,
+  and judge in the shipped workflows pins `effort: 'xhigh'`, so verification stays
+  strong even when a small driver runs the session at lower effort.
+- Workflow robustness fixes from the audit: paranoid-review no longer silently drops
+  a second distinct finding at the same file:line (dedup key includes the title),
+  reports a dead finder dimension as UNREVIEWED instead of clean, and budget-guards
+  its verify fan-out; bug-hunt no longer counts a round of crashed hunters as "dry"
+  and logs when the round cap ends a still-wet hunt; deep-plan returns the raw winning
+  plan loudly (never a silent null) when the synthesizer dies.
+- README claims aligned with code: bench described as *measuring* (not "proving"),
+  destructive-guard/claim-audit bypass classes documented in Known limits, live-verify
+  date scoped to the components it actually covered, doctrine line count fixed.
+
 ## v1.5 — 2026-07-06
 
 Succession pass — Fable 5's last change to this repo. The kit was built to run

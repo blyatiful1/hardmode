@@ -39,6 +39,12 @@ stages because you feel confident — feeling confident is not evidence.
 - Re-read the original request one last time and check the task list: every deliverable shipped?
 - Non-obvious lessons (surprising root cause, dead-end approach, environment quirk) → postmortem skill → auto-memory.
 
+## If the Workflow tool is unavailable
+The /deep-plan and /paranoid-review stages assume saved workflows. Your invoking this
+skill authorizes those runs; but if the Workflow tool is genuinely unavailable in the
+session, do the same stage with Agent-tool subagents (3 refuters / plan critic /
+per-dimension reviewers spawned directly) — degrade the machinery, never the rigor.
+
 ## Cost honesty
 This protocol multiplies agent spend. That is the point — but say what it cost when
 you're done (agents spawned, roughly what they did), and downshift stages the moment

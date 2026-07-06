@@ -34,7 +34,8 @@ const votes = (await parallel(LENSES.map((lens, i) => () =>
 Claim: "${claim}"
 Work in the current directory. Cite concrete evidence for your verdict.
 verdict=refuted only with concrete evidence the claim is false; withstood only if you actively attacked it and it held; unproven if after honest effort you cannot decide — an unproven claim does not pass, but it is not disproven either.`,
-    { label: `refute:${i + 1}`, schema: VERDICT }
+    // Refuters ARE the verification layer: hold xhigh even on a low-effort session.
+    { label: `refute:${i + 1}`, schema: VERDICT, effort: 'xhigh' }
   )
 // A dead refuter is not a passing vote — count it as unproven, fail closed.
 ))).map((v, i) => ({

@@ -1,7 +1,24 @@
 #!/usr/bin/env bash
 # fable-protocol installer — copies the framework into ~/.claude with backups.
 # Never edits settings.json; prints the snippet to merge instead.
+#
+# Flags (both optional, for small driver models — see docs/SUCCESSION.md):
+#   --tier small          print the small-driver settings snippet (FABLE_LOOP_THRESHOLD=2)
+#   --strong-model <m>    pin the verification agents (verifier, oracle, plan-critic)
+#                         to model <m>, e.g. --strong-model opus — draft cheap, verify strong
 set -euo pipefail
+
+TIER="opus"
+STRONG_MODEL=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --tier) TIER="${2:?--tier needs a value (small|opus)}"; shift 2 ;;
+    --strong-model) STRONG_MODEL="${2:?--strong-model needs a model name, e.g. opus}"; shift 2 ;;
+    -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    *) echo "unknown flag: $1 (see --help)"; exit 1 ;;
+  esac
+done
+case "$TIER" in small|opus) ;; *) echo "unknown --tier: $TIER (small|opus)"; exit 1 ;; esac
 
 SRC="$(cd "$(dirname "$0")/claude" && pwd)"
 DST="${CLAUDE_DIR:-$HOME/.claude}"
@@ -21,13 +38,27 @@ backup() {
 # identical <src> <dst> — true if dst exists and matches src (skip needless backups).
 identical() { [ -f "$2" ] && cmp -s "$1" "$2"; }
 
-echo "Installing fable-protocol into $DST"
+# render_agent <src> — agent markdown to stdout, with a `model:` pin injected into the
+# frontmatter when --strong-model was given (asymmetric verification: draft cheap,
+# verify strong). Skips injection if the frontmatter already pins a model.
+render_agent() {
+  if [ -n "$STRONG_MODEL" ] && ! awk '/^---$/{n++; next} n==1 && /^model:/{found=1} END{exit !found}' "$1"; then
+    awk -v m="$STRONG_MODEL" 'NR>1 && /^---$/ && !done { print "model: " m; done=1 } { print }' "$1"
+  else
+    cat "$1"
+  fi
+}
+
+echo "Installing fable-protocol into $DST${STRONG_MODEL:+ (verification agents pinned to model: $STRONG_MODEL)}"
 mkdir -p "$DST/agents" "$DST/workflows" "$DST/skills" "$DST/hooks"
 
+TMP_AGENT="$(mktemp)"
+trap 'rm -f "$TMP_AGENT"' EXIT
 for f in "$SRC"/agents/*.md; do
   t="$DST/agents/$(basename "$f")"
-  identical "$f" "$t" && { echo "  agent:    $(basename "$f") (unchanged)"; continue; }
-  backup "$t" "agents/$(basename "$f")"; cp "$f" "$t"; echo "  agent:    $(basename "$f")"
+  render_agent "$f" > "$TMP_AGENT"
+  identical "$TMP_AGENT" "$t" && { echo "  agent:    $(basename "$f") (unchanged)"; continue; }
+  backup "$t" "agents/$(basename "$f")"; cp "$TMP_AGENT" "$t"; echo "  agent:    $(basename "$f")"
 done
 for f in "$SRC"/workflows/*.js; do
   t="$DST/workflows/$(basename "$f")"
@@ -71,17 +102,34 @@ else
   echo "  NOTE: 'claude' not found on PATH — could not verify Claude Code >= 2.1.154."
 fi
 
+SNIPPET="$SRC/settings/settings-snippet.json"
+[ "$TIER" = "small" ] && SNIPPET="$SRC/settings/settings-snippet-small.json"
 echo
 echo "Last step (manual): merge this into $DST/settings.json:"
 echo "----------------------------------------------------------------"
-cat "$SRC/settings/settings-snippet.json"
+cat "$SNIPPET"
 echo "----------------------------------------------------------------"
+if [ "$TIER" = "small" ]; then
+  echo "Small-driver tier (docs/SUCCESSION.md): FABLE_LOOP_THRESHOLD=2 — on a small model"
+  echo "the SECOND identical failure is already the signal. Prefer the scripted workflows"
+  echo "over free-form delegation, and run big work as /big-task <task> (checkpointed"
+  echo "steps, adversarial verify, commit every green)."
+  if [ -z "$STRONG_MODEL" ]; then
+    echo "TIP: re-run with --strong-model <strongest tier your plan offers> to pin the"
+    echo "verification agents — draft cheap, verify strong. Never let the checker be"
+    echo "weaker than the drafter on work that matters."
+  fi
+fi
 echo "effortLevel xhigh is the single biggest lever on Opus 4.8. The hook set:"
 echo "  Stop         claim-audit gate (benchmarked: bench/RESULTS.md)"
 echo "  PreCompact + SessionStart(compact)  save/inject the original request verbatim"
 echo "               plus the actual git state after every compaction"
 echo "  PreToolUse   destructive-command guard (protects uncommitted work)"
-echo "  PostToolUse  loop alarm (3rd identical failing command -> stop and reassess)"
+if [ "$TIER" = "small" ]; then
+  echo "  PostToolUse  loop alarm (2nd identical failing command -> stop and reassess)"
+else
+  echo "  PostToolUse  loop alarm (3rd identical failing command -> stop and reassess)"
+fi
 echo "  PostToolUse  test-weakening alarm (skip/disable marker added to a test file)"
 echo "CLAUDE_CODE_MAX_OUTPUT_TOKENS is best-effort (harmless; clamped per model)."
 echo
