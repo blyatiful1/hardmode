@@ -44,8 +44,20 @@ claude/
                                per step implement (cheap) → adversarial verify (strong,
                                xhigh; pin --verify-model=<tier>) → commit every green;
                                halts loudly, keeps every committed checkpoint
+    design-variants.js         judge-panel web design: art director sets 3 competing
+                               directions (different design views) → 3 builders write
+                               self-contained HTML previews → distinct-lens judges
+                               (+ German-compliance judge when the brief says German)
+                               → synthesis: winner + what to graft from the losers
   skills/
     fable/                     the flagship: full staged protocol for hard tasks (/fable)
+    webdesign/                 web design protocol: explicit design views (static /
+                               animated / interactive / immersive / commerce), design
+                               brief before code, empirical verify (screenshots,
+                               reduced-motion), German-market hard gate; ships
+                               references/design-views.md + references/german-market.md
+                               (live-researched, sources cited, claims adversarially
+                               verified at authoring time)
     orchestrate/               multi-agent workflow authoring playbook
     postmortem/                distill lessons into persistent memory
   hooks/
@@ -123,6 +135,8 @@ Finally, confirm the doctrine load in a fresh session: *"quote the first bullet 
 | Acting on a diagnosis / root cause / external fact | `/verify-claim <claim>` |
 | Latent bugs in existing code | `/bug-hunt [scope]` |
 | Task too big to hold in one head (especially on a small driver) | `/big-task <task>` — checkpointed steps, adversarial verify, commit every green |
+| Website / landing-page work | `webdesign` skill — design view + brief + empirical verify; German/DACH sites must pass its compliance gate |
+| Visual direction genuinely open | `/design-variants <brief>` — competing HTML previews, judged, one recommended |
 | Bug survives two fix attempts | `oracle` agent |
 | Work one context can't hold | `orchestrate` skill |
 | End of a debugging saga | `postmortem` skill |

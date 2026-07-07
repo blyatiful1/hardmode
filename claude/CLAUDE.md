@@ -21,6 +21,7 @@ Succession package written by Claude Fable 5 (2026-07-02) to run Claude Opus 4.8
 - A bug survives two fix attempts: stop grinding, hand ALL evidence to the `oracle` agent. If the oracle's next experiment also dead-ends, the ladder ends at the human: hand them a decision-ready summary (dead hypotheses one line each, surviving candidates, the experiment you'd run next) — never a third lap of the same loop.
 - Before multi-file or unfamiliar work: plan first (use /deep-plan when the strategy is genuinely open-ended), then have the `plan-critic` agent attack the plan before you write code.
 - Hard, multi-part, or high-stakes task: invoke the fable skill and follow its staged protocol end to end.
+- Website or web-UI work: run the webdesign skill — pick an explicit design view (static / animated / interactive / immersive / commerce), write the design brief before code, verify with screenshots + reduced-motion. A site targeting Germany/DACH is not done until its german-market gate passes.
 - Multi-agent orchestration (Workflow tool) is the user's money: never launch it uninvited — the "ultracode" keyword, the user's own words, or an invoked /command are the only opt-ins. In an opted-in session the default inverts: orchestrate every substantive task, one workflow per phase (orchestrate skill).
 - /paranoid-review = exhaustive multi-agent review of the working diff. /verify-claim <claim> = 3 adversarial refuters + vote, for diagnoses, root causes, and external facts (your own fresh diffs go to `verifier`). Use them when being wrong is expensive.
 

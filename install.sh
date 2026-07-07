@@ -38,6 +38,35 @@ backup() {
 # identical <src> <dst> — true if dst exists and matches src (skip needless backups).
 identical() { [ -f "$2" ] && cmp -s "$1" "$2"; }
 
+# skill_unchanged <src_dir> <dst_dir> — true if every file the repo ships for this
+# skill already matches the destination AND the recorded ship-list (.fable-manifest)
+# is current. Files a USER added are ignored (and preserved); files a PREVIOUS kit
+# version shipped are tracked in the manifest so upgrades can prune them — a stale
+# formerly-shipped checklist sitting next to the current one is silent drift.
+skill_unchanged() {
+  local f rel
+  [ -f "$2/.fable-manifest" ] || return 1
+  diff -q <(cd "$1" && find . -type f | sort) "$2/.fable-manifest" >/dev/null 2>&1 || return 1
+  while IFS= read -r -d '' f; do
+    rel="${f#"$1"/}"
+    cmp -s "$f" "$2/$rel" || return 1
+  done < <(find "$1" -type f -print0)
+  return 0
+}
+
+# prune_stale_skill_files <src_dir> <dst_dir> — remove files the manifest says a
+# previous kit version shipped but this version no longer does. User files (never
+# in a manifest) are untouched. Runs after backup, so nothing is unrecoverable.
+prune_stale_skill_files() {
+  local rel
+  [ -f "$2/.fable-manifest" ] || return 0
+  while IFS= read -r rel; do
+    rel="${rel#./}"
+    [ -n "$rel" ] || continue
+    [ -f "$1/$rel" ] || rm -f "$2/$rel"
+  done < "$2/.fable-manifest"
+}
+
 # render_agent <src> — agent markdown to stdout, with a `model:` pin injected into the
 # frontmatter when --strong-model was given (asymmetric verification: draft cheap,
 # verify strong). Skips injection if the frontmatter already pins a model.
@@ -67,8 +96,11 @@ for f in "$SRC"/workflows/*.js; do
 done
 for d in "$SRC"/skills/*/; do
   name="$(basename "$d")"; t="$DST/skills/$name"
-  identical "$d/SKILL.md" "$t/SKILL.md" && { echo "  skill:    $name (unchanged)"; continue; }
-  backup "$t" "skills/$name"; mkdir -p "$t"; cp "$d/SKILL.md" "$t/SKILL.md"; echo "  skill:    $name"
+  skill_unchanged "${d%/}" "$t" && { echo "  skill:    $name (unchanged)"; continue; }
+  backup "$t" "skills/$name"; prune_stale_skill_files "${d%/}" "$t"
+  mkdir -p "$t"; cp -r "${d%/}"/. "$t"/
+  (cd "${d%/}" && find . -type f | sort) > "$t/.fable-manifest"
+  echo "  skill:    $name"
 done
 for f in "$SRC"/hooks/*.py; do
   t="$DST/hooks/$(basename "$f")"

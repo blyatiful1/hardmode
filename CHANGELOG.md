@@ -1,5 +1,65 @@
 # Changelog
 
+## v1.7 — 2026-07-07
+
+Design pass: the kit learns to design websites, not just verify code — with the
+German market as a first-class citizen. Reference content was produced by a live
+web-research workflow (6 parallel researchers over primary sources) whose
+load-bearing legal/technical claims were adversarially verified before authoring.
+
+### Added
+- **`webdesign` skill** — a staged web-design protocol that composes with /fable:
+  frame the site → pick an explicit **design view** → design brief before code →
+  implement by the view's rules → verify like a visitor (screenshots, reduced-motion
+  drive, keyboard walk), then like a lawyer. Ships two on-demand reference docs:
+  - `references/design-views.md` — the design-view taxonomy: **static/content-first,
+    animated/motion-rich, interactive/app-like, immersive/scrollytelling, commerce**;
+    per view a tech ceiling (no SPA on a brochure site; scroll-driven CSS before
+    JS libraries), a motion vocabulary (`prefers-reduced-motion`: wrap, don't
+    dampen), and a Core-Web-Vitals-anchored performance budget.
+  - `references/german-market.md` — the German/DACH **hard gate**: Impressum
+    (§ 5 DDG), Datenschutzerklärung (DSGVO), consent (§ 25 TDDDG) with the
+    build-consent-free-first stance, BFSG accessibility (EN 301 549 / WCAG 2.1 AA),
+    shop rules (§ 312j BGB button, PAngV, Widerruf), self-hosted fonts (LG München,
+    Google-Fonts ruling), two-click embeds, consent-free analytics, German
+    typography („…“, ß/ẞ, `lang="de"` + `hyphens: auto`, DIN-style formats,
+    Sie/du as a one-time brand decision), and trust conventions.
+- **`/design-variants` workflow** (`claude/workflows/design-variants.js`) — judge-panel
+  design for genuinely open visual direction: an art director sets 3 competing
+  directions (different design views where the brief allows), 3 builders produce
+  self-contained zero-external-request HTML previews under `design-previews/`,
+  distinct-lens judges (craft / audience fit / engineering, **plus a German-market
+  compliance judge** when the brief mentions Germany) score every file they actually
+  read, a synthesis names the winner and what to graft. Judges pin `effort: 'xhigh'`
+  (asymmetric verification, kit rule).
+- Doctrine bullet + fable-skill pointer routing website/web-UI work to the skill;
+  README tree + playbook rows.
+- `tests/test_webdesign_skill.py` — trigger-surface frontmatter, reference routing,
+  the load-bearing law names, taxonomy coverage, and the installer/doctor
+  regressions below. Suite: 100 → 110.
+
+### Changed
+- **`install.sh` installs skills as whole directories** — previously only `SKILL.md`
+  was copied, which would have silently dropped `references/`; a skill whose
+  checklist doesn't arrive is worse than no skill. Idempotency now compares every
+  shipped file plus a recorded ship-list (`.fable-manifest`), so upgrades **prune
+  files a previous kit version shipped but the current one doesn't** (a stale
+  formerly-shipped checklist is silent drift) while user-added files are ignored
+  and preserved. `tools/doctor.sh` verifies every shipped skill file (missing →
+  FAIL, content drift → warn and no `ok` line, mirroring the hook checks). CI's
+  install end-to-end step counts skills dynamically instead of hard-coding 3.
+- The release diff itself went through the kit's own machinery before landing:
+  plan-critiqued, /paranoid-review'd (22 agents; 18 confirmed findings fixed — the
+  headline one: the webdesign skill's variants stage self-granted the Workflow
+  opt-in, contradicting the orchestration gate; it now defers to the user), and the
+  installed result live-tested on `claude-opus-4-8` (headless skill-discovery smoke
+  + an ultracode workflow where Opus builders execute the skill end-to-end under
+  xhigh adversarial audits). The violations those audits confirmed were folded back
+  into the cross-view invariants: contrast checked per interactive STATE (the
+  ghost-button hover fill), `scroll-behavior: smooth` counts as motion and lives
+  inside the reduced-motion query, sticky headers demand `scroll-margin-top` on
+  anchor targets.
+
 ## v1.6 — 2026-07-06
 
 Structure pass: SUCCESSION.md's advice becomes shipped mechanism, and the kit learns

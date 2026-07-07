@@ -47,9 +47,16 @@ for f in "$SRC"/workflows/*.js; do
     || bad "workflow missing: $DST/workflows/$(basename "$f")"
 done
 for d in "$SRC"/skills/*/; do
-  name="$(basename "$d")"
-  [ -f "$DST/skills/$name/SKILL.md" ] && ok "skill: $name" \
-    || bad "skill missing: $DST/skills/$name/SKILL.md"
+  name="$(basename "$d")"; complete=1; drifted=0
+  while IFS= read -r -d '' f; do
+    rel="${f#"${d%/}"/}"
+    if [ ! -f "$DST/skills/$name/$rel" ]; then
+      bad "skill file missing: $DST/skills/$name/$rel"; complete=0
+    elif ! cmp -s "$f" "$DST/skills/$name/$rel"; then
+      warn "skill file differs from this repo checkout: $DST/skills/$name/$rel (older kit version?)"; drifted=1
+    fi
+  done < <(find "${d%/}" -type f -print0)
+  [ "$complete" -eq 1 ] && [ "$drifted" -eq 0 ] && ok "skill: $name"
 done
 
 # 3. Doctrine is loadable.

@@ -46,8 +46,9 @@ jobs:
           CLAUDE_DIR=/tmp/fake-claude ./install.sh > /dev/null
           CLAUDE_DIR=/tmp/fake-claude ./install.sh | grep -q 'unchanged'
           test -f /tmp/fake-claude/skills/fable/SKILL.md
+          test -f /tmp/fake-claude/skills/webdesign/references/german-market.md
           # backups must never create loadable duplicates inside skills/
-          test "$(ls /tmp/fake-claude/skills | wc -l)" = "3"
+          test "$(ls /tmp/fake-claude/skills | wc -l)" = "$(ls claude/skills | wc -l)"
 
       - name: Bench anchor — pristine task scores 1/15
         run: |

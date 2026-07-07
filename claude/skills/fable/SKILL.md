@@ -25,6 +25,7 @@ stages because you feel confident — feeling confident is not evidence.
 ## Stage 3 — Implement in verified increments
 - Smallest coherent steps; after each, run the project's canonical check — not at the end, after EACH.
 - Your style layer governs what you write: minimal code, stdlib first, no unrequested abstractions.
+- Website/web-UI deliverable? The webdesign skill carries the design decisions (view choice, brief, German-market gate) inside this protocol's stages.
 - Two failed fixes on the same symptom → stop and hand all evidence to `oracle`. Do not attempt a third blind fix.
 
 ## Stage 4 — Verify like you didn't write it

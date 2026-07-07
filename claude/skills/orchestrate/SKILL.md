@@ -26,8 +26,9 @@ for that, not you. You may call it only when one of these holds:
 - The user asked for orchestration in their own words ("use a workflow", "fan out
   agents") — a task that would merely *benefit* from one does not count.
 - A skill or slash command the user invoked tells you to call Workflow (the kit's
-  /paranoid-review, /verify-claim, /deep-plan, /bug-hunt, /big-task all qualify —
-  invoking the command IS the opt-in for that run).
+  /paranoid-review, /verify-claim, /deep-plan, /bug-hunt, /big-task,
+  /design-variants all qualify — the USER invoking the command is the opt-in for
+  that run; a skill you auto-triggered yourself is not).
 Otherwise: use Agent-tool subagents, or briefly describe what a workflow would do and
 roughly cost, and tell the user they can say "ultracode" or "use a workflow" to get it.
 
@@ -79,5 +80,6 @@ as `budget` — `budget.total` (null if no target), `budget.spent()`, `budget.re
 ## Saved workflows already installed
 /paranoid-review (diff review), /verify-claim (claim refutation), /deep-plan (judge-panel
 planning), /bug-hunt (loop-until-dry sweep), /big-task (checkpointed decompose →
-implement → strong-verify → commit). Check these before authoring a new script —
-the pattern you need may already be a command.
+implement → strong-verify → commit), /design-variants (judge-panel web design:
+competing HTML previews, German-market judge when the brief says German). Check
+these before authoring a new script — the pattern you need may already be a command.
