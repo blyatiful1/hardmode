@@ -153,10 +153,12 @@ hold, quiet where it would annoy, fail-open everywhere.
   high-activity sessions that banked nothing and proposes what was worth keeping.
 - **The promotion boundary is a hook, not a rule.** The one line that must hold is project →
   global: a work marker (internal ticket id, private hostname, client codename) must never
-  cross into the shared corpus. A PreToolUse guard scans the pending content of any write
-  into `~/.claude/memory/` against your `privacy.toml` and blocks it (exit 2) before the
-  marker lands; `mem doctor --privacy` is the detective backstop for anything that predates
-  the guard.
+  cross into the shared corpus. A PreToolUse guard scans the pending content of any
+  **Write/Edit/MultiEdit** into `~/.claude/memory/` against your `privacy.toml` and blocks it
+  (exit 2) before the marker lands; it matches those tools, not Bash/interpreter writes
+  (`cp`/`cat >>`/`python3 -c`), so `mem doctor --privacy` is the detective backstop that sweeps
+  the whole corpus dir — including the `.ndjson` journal — for anything the write-time gate
+  didn't see.
 - **Hygiene that proposes, never deletes.** `mem gc-scan` mechanically flags near-duplicates,
   stale entries, relative-date offenders, and same-topic pairs; `/memory-gc` adds three-way
   contradiction judges and rebuilds the index. Every removal comes back as a proposal — the
@@ -266,7 +268,7 @@ Going the other direction — running the kit on a **smaller** driver model (a S
 - The test-weakening alarm reads Edit/Write payloads, so a skip marker smuggled in via a Bash heredoc doesn't trip it at edit time — but the claim-audit gate now flags any file-writing Bash command that names a test path, so the stop-time audit still fires.
 - The destructive-command guard is a tripwire, not a jail: known bypass classes include commands wrapped in `sh -c '...'`, destructive flags hidden by quoting (`git reset '--hard'`), and some `rm -rf` variants (`~/*`, `./*`). The claim-audit gate similarly misses file writes done through interpreters (`python3 -c`) and some multi-line Bash forms. These hooks raise the cost of the documented *reflexive* failure modes; they do not stop a determined evader — pair them with the doctrine, and treat any deliberate bypass in a transcript as the incident.
 - The fable-mem session journal and its reindex run on SessionEnd, which fires on graceful exit (`/clear`, resume, logout, quit) but is **not** guaranteed on a hard crash or SIGKILL — a session killed mid-flight leaves no breadcrumb, and its memory waits for the next SessionEnd to be indexed. The corpus files are never at risk (the model writes them during the session); only the journal line and index freshness are.
-- The privacy guard's `privacy.toml` patterns are **necessary, not sufficient**: they block the markers you list, not the ones you forgot. The list ships empty and conservative so a fresh install never false-positives — which means it catches nothing until you fill in your real work markers. Treat it as a tripwire for known-shaped leaks, not a classifier, and run `mem doctor --privacy` before promoting.
+- The privacy guard's `privacy.toml` patterns are **necessary, not sufficient**: they block the markers you list, not the ones you forgot. The list ships empty and conservative so a fresh install never false-positives — which means it catches nothing until you fill in your real work markers. Treat it as a tripwire for known-shaped leaks, not a classifier, and run `mem doctor --privacy` before promoting. The guard is also **tool-scoped**: it fires on `Write|Edit|MultiEdit` into the corpus, not on Bash/interpreter writes (`cp`/`mv`/`cat >>`/`python3 -c`) — the same interpreter-bypass class the destructive-guard and claim-audit gates document — so a promotion done by copying rather than re-writing lands unscanned; `mem doctor --privacy` (which now sweeps the `.ndjson` journal too, not just `*.md`) is the backstop.
 - fable-mem claims `~/.claude/memory/` because no native feature uses it: main-session auto-memory is per-repo (`~/.claude/projects/<p>/memory/`) and native "user scope" memory is **per-subagent islands** (`~/.claude/agent-memory/<name>/`), not a shared cross-project store. If a future Claude Code ships a real shared user-memory surface at that path, re-check for collision before upgrading.
 - No prompt kit closes the gap on the longest-horizon work (multi-hour autonomous runs); route those to a stronger model when available.
 - Built for Claude Code 2.1.x in mid-2026; contracts (workflow API, hook events, frontmatter) may drift. The v1.1 components were verified live on `claude-opus-4-8` + Claude Code 2.1.198 on 2026-07-02; components added since (v1.2+ hooks, doctor, small-tier profile, /big-task) are covered by the unit suite and workflow checker but have not all had a live session pass — run `./tools/doctor.sh` and the one-minute live checks after installing.

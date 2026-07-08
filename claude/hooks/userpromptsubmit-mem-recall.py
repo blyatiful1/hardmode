@@ -17,10 +17,13 @@ FAIL-OPEN GUARANTEE
     A UserPromptSubmit hook must never cost the user a prompt. Every failure mode —
     malformed stdin, missing/locked index, a stale index, a bug in this file — ends
     in `sys.exit(0)` with no output, so the prompt reaches Claude untouched. This
-    hook is STRICTLY read-only: it opens the index `mode=ro` with a small busy
-    timeout and NEVER builds or reindexes on the prompt path (that is the SessionEnd
-    journal hook's job). If the index is stale relative to the corpus it stays
-    silent rather than serve possibly-wrong hits or block to rebuild.
+    hook is STRICTLY read-only: it opens the index `mode=ro` (WAL, so it reads a
+    snapshot concurrently with a writer instead of blocking) and NEVER builds or
+    reindexes on the prompt path (that is the SessionEnd journal hook's job). It does
+    NOT globally mute on a stale index — pointers are cheap, so a slightly-stale
+    index still serves; only individually-dead pointers (vanished files) are dropped.
+    The old "any newer corpus file => silence" gate turned one mid-session bank (or a
+    single future-mtimed synced file) into total, sometimes permanent, recall loss.
 
 PROMPT-INJECTION POSTURE
     Memory files are untrusted content. Titles/descriptions are emitted as inert,
@@ -36,7 +39,7 @@ import sys
 import time
 
 DB_NAME = "mem-index.db"
-BUSY_TIMEOUT_MS = 500          # small busy timeout — never wait on a writer
+BUSY_TIMEOUT_MS = 2000         # wait out a writer's brief lock (WAL: readers rarely block)
 MAX_HITS = 3                   # hard cap on injected pointers
 CANDIDATE_LIMIT = 25           # rows to consider before relevance gating
 MAX_TOTAL_CHARS = 2400         # ~600-token hard budget (also << 10k additionalContext cap)
@@ -116,9 +119,15 @@ def save_injected(path, injected):
 # ---------------------------------------------------------------------------
 # keyword extraction
 # ---------------------------------------------------------------------------
+# Unicode word token (letters/digits across all scripts, "_" excluded) to MATCH the
+# fts5 unicode61 index — an ASCII-only regex truncates "Café"->"Caf" and drops CJK
+# entirely, so recall silently never fires for non-English prompts.
+WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+
 def keywords(text):
     seen, out = set(), []
-    for t in re.findall(r"[A-Za-z0-9]+", str(text).lower()):
+    for t in WORD.findall(str(text).lower()):
         if len(t) > 2 and t not in STOPWORDS and t not in seen:
             seen.add(t)
             out.append(t)
@@ -147,28 +156,6 @@ def open_ro(path):
     )
     conn.execute("PRAGMA busy_timeout=%d" % BUSY_TIMEOUT_MS)
     return conn
-
-
-def index_is_stale(base, db_file):
-    """True if any corpus .md is newer than the index (=> skip silently, never build).
-    Also True on any error, so an unreadable corpus errs toward silence."""
-    try:
-        db_mtime = os.path.getmtime(db_file)
-    except OSError:
-        return True
-    import glob
-    globs = [
-        os.path.join(memory_dir(base), "*.md"),
-        os.path.join(base, "projects", "*", "memory", "*.md"),
-    ]
-    for pat in globs:
-        for f in glob.iglob(pat):
-            try:
-                if os.path.getmtime(f) > db_mtime + 1e-6:
-                    return True
-            except OSError:
-                return True
-    return False
 
 
 def fts_available(conn):
@@ -209,11 +196,18 @@ def query_hits(base, kws):
 
     Read-only, single connection, no writes. Overlap is measured on title +
     description ONLY (the fields we actually surface), so every shown pointer is
-    self-explanatory and weak body-only coincidences are dropped."""
+    self-explanatory and weak body-only coincidences are dropped.
+
+    STALENESS: this deliberately does NOT globally mute on a stale index. Because it
+    surfaces only POINTERS (title/description/path — never bodies) that the caller opens
+    with its own tools, a slightly-stale pointer is cheap. A global mtime gate instead
+    made recall go fully dark for the rest of a session the moment ANY corpus file was
+    touched (native MEMORY.md, a mid-session bank), and a single future-mtimed corpus
+    file (Syncthing/rsync clock skew) disabled recall permanently — surviving even
+    `index --rebuild`. We drop only individually-dead pointers (files that have since
+    vanished) so a stale entry never sends the caller to a missing path."""
     db_file = db_path(base)
     if not os.path.exists(db_file):
-        return []
-    if index_is_stale(base, db_file):
         return []
     conn = open_ro(db_file)
     try:
@@ -232,6 +226,10 @@ def query_hits(base, kws):
     need = min_overlap(len(kws))
     scored = []
     for _mid, name, desc, path, scope, project in rows:
+        # Drop dead pointers: if the backing file has since vanished (deleted mid-session,
+        # index not yet refreshed) don't send the caller to a missing path.
+        if path and not os.path.exists(path):
+            continue
         surface = ("%s %s" % (name or "", desc or "")).lower()
         overlap = sum(1 for t in kws if t in surface)
         if overlap >= need:

@@ -16,9 +16,13 @@ WHY THIS EXISTS
        (mtime-walk, only changed files) so memory written this session is searchable
        in the next one. This is the only place the index is refreshed on the hot path.
 
-    The journal line is written BEFORE the reindex, and both git and reindex
-    subprocesses carry hard `timeout=` bounds, so even if the harness kills the hook
-    at its budget the breadcrumb is already durable.
+    The journal line is written BEFORE the reindex, and the breadcrumb's git
+    subprocesses carry BOTH a per-call timeout AND a small TOTAL wall-clock budget
+    (GIT_TOTAL_BUDGET), so three sequential git calls can never approach the 10s
+    SessionEnd budget: the line is durable within a few seconds even when git hangs,
+    long before the harness kill. (The earlier 3×5s per-call bound could reach 15s of
+    git before the append — past the 10s kill — silently losing the breadcrumb on
+    exactly the big/slow-repo sessions /memory-review most wants to mine.)
 
 FAIL-OPEN GUARANTEE
     SessionEnd cannot block teardown and must never raise. Any failure — malformed
@@ -31,12 +35,16 @@ import json
 import os
 import subprocess
 import sys
+import time
 from datetime import datetime, timezone
 
 JOURNAL_NAME = "journal.ndjson"
 ROTATED_NAME = "journal.1.ndjson"
 ROTATE_BYTES = 5 * 1024 * 1024      # 5 MB
-GIT_TIMEOUT = 5                     # hard bound on each git subprocess (<= 5s)
+GIT_TIMEOUT = 2                     # per-git-call hard bound (s)
+GIT_TOTAL_BUDGET = 4               # total wall-clock across ALL git calls (s) — must
+#                                    stay well under the 10s SessionEnd budget so the
+#                                    breadcrumb is written before any harness kill.
 REINDEX_TIMEOUT = 8                 # hard bound on the incremental reindex
 
 
@@ -52,12 +60,15 @@ def journal_path(base):
     return os.path.join(memory_dir(base), JOURNAL_NAME)
 
 
-def _git(args, cwd):
-    """Run a git command with a hard timeout. Returns stdout on success, else None."""
+def _git(args, cwd, timeout):
+    """Run a git command with a hard timeout. Returns stdout on success, else None.
+    A non-positive timeout means the total git budget is spent — skip the call."""
+    if timeout <= 0:
+        return None
     try:
         p = subprocess.run(
             ["git"] + args, cwd=cwd or None,
-            capture_output=True, text=True, timeout=GIT_TIMEOUT,
+            capture_output=True, text=True, timeout=timeout,
         )
         if p.returncode != 0:
             return None
@@ -68,15 +79,25 @@ def _git(args, cwd):
 
 def git_breadcrumbs(cwd):
     """Return {git_root, branch, dirty_count} — each key omitted if git can't answer.
-    A deterministic trace even when git is absent or cwd is not a repo."""
+    A deterministic trace even when git is absent or cwd is not a repo.
+
+    Every call is bounded by BOTH GIT_TIMEOUT (per call) and a shared GIT_TOTAL_BUDGET
+    deadline, so however slow/hanging git is, all three calls together finish within a
+    few seconds — the caller then appends the breadcrumb well before the SessionEnd
+    kill. A hang just yields a git-less (but still durable) line."""
     out = {}
-    root = _git(["rev-parse", "--show-toplevel"], cwd)
+    deadline = time.monotonic() + GIT_TOTAL_BUDGET
+
+    def budget():
+        return min(GIT_TIMEOUT, deadline - time.monotonic())
+
+    root = _git(["rev-parse", "--show-toplevel"], cwd, budget())
     if root is not None and root.strip():
         out["git_root"] = root.strip()
-    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd)
+    branch = _git(["rev-parse", "--abbrev-ref", "HEAD"], cwd, budget())
     if branch is not None and branch.strip():
         out["branch"] = branch.strip()
-    status = _git(["status", "--porcelain"], cwd)
+    status = _git(["status", "--porcelain"], cwd, budget())
     if status is not None:
         out["dirty_count"] = len([ln for ln in status.splitlines() if ln.strip()])
     return out

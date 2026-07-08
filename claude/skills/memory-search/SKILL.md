@@ -33,5 +33,6 @@ The UserPromptSubmit recall hook already surfaces the top few cross-project hits
 To bank a lesson, use the **postmortem** skill — it writes the memory and decides scope.
 A memory stays project-local by default; promotion project→global happens ONLY on an explicit
 decision with a one-line why-global. The deterministic gate is `pretool-mem-privacy-guard.py`,
-which blocks any corpus write carrying a work-marker regardless of intent — so promotion is
-prevention-by-hook, not a manual scan you can forget.
+which blocks a Write/Edit/MultiEdit into the corpus carrying a work-marker regardless of intent
+— so the common promotion path is prevention-by-hook. It does not see Bash/interpreter writes
+(`cat >>`, `python3 -c`); run `mem doctor --privacy` as the backstop before promoting.

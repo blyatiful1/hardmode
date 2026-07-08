@@ -30,19 +30,22 @@ synonym-recall misses).
   bodies).
 - **Session-journal hook (`sessionend-mem-journal.py`, SessionEnd).** Appends exactly one
   NDJSON breadcrumb per session (ISO ts, cwd, git root + branch + dirty-file count, end
-  reason — computed via a hard-`timeout=`-bounded `git` subprocess, since SessionEnd carries
-  no native metadata beyond `reason`) to `~/.claude/memory/journal.ndjson`, rotates at 5MB,
-  then runs an incremental `mem index` so this session's memory is searchable next session.
-  The line is written **before** the reindex, and both settings snippets declare an explicit
-  `"timeout": 10` (the SessionEnd default is 1.5s, which would kill the hook and lose the
-  breadcrumb). Fail-open.
+  reason — computed via `git` subprocesses bounded by BOTH a per-call `timeout=` AND a small
+  total wall-clock budget, since SessionEnd carries no native metadata beyond `reason`) to
+  `~/.claude/memory/journal.ndjson`, rotates at 5MB, then runs an incremental `mem index` so
+  this session's memory is searchable next session. The line is written **before** the reindex,
+  and both settings snippets declare an explicit `"timeout": 10` (the SessionEnd default is
+  1.5s, which would kill the hook and lose the breadcrumb); the total git budget stays well
+  under that 10s so a slow/hanging git can never delay the append past the kill. Fail-open.
 - **Privacy-guard hook (`pretool-mem-privacy-guard.py`, PreToolUse on `Write|Edit|MultiEdit`).**
-  The deterministic project→global promotion gate: any write whose target resolves under
-  `~/.claude/memory/` has its pending content (`content`/`new_string`) scanned against the
-  user's `privacy.toml` work-markers; a hit `exit 2`s and blocks the write **before** the
-  marker lands. Writes outside the corpus and clean payloads pass untouched; unloadable
-  patterns fail open (a guard that can't read patterns can't honestly block). Advisory
-  SKILL.md text was never enough — under momentum the model promotes anyway.
+  The deterministic project→global promotion gate: a `Write|Edit|MultiEdit` whose target
+  resolves under `~/.claude/memory/` has its pending content (`content`/`new_string`) scanned
+  against the user's `privacy.toml` work-markers; a hit `exit 2`s and blocks the write
+  **before** the marker lands. It matches those tools, not Bash/interpreter writes (`cat >>`,
+  `python3 -c`) — `mem doctor --privacy` is the backstop for those. Writes outside the corpus
+  and clean payloads pass untouched; unloadable patterns fail open (a guard that can't read
+  patterns can't honestly block). Advisory SKILL.md text was never enough — under momentum the
+  model promotes anyway.
 - **`memory-search` skill** — search the machine-wide corpus before re-deriving a decision
   already made in another repo; when to search, when NOT (facts visible in the current
   repo/git/CLAUDE.md), and how to promote a project lesson to global.
@@ -69,9 +72,8 @@ synonym-recall misses).
   entries (the SessionEnd crash gap, patterns-necessary-not-sufficient, per-subagent memory
   islands).
 - `tests/test_mem_cli.py`, `tests/test_mem_recall_hook.py`, `tests/test_mem_journal_hook.py`,
-  `tests/test_mem_privacy_guard.py`, `tests/test_memory_skill.py`, plus the settings-snippet
-  expected-dict (three new hook→event rows) and the stateful-hook consistency tuple (recall
-  hook). Suite: 110 → 148.
+  `tests/test_mem_privacy_guard.py`, plus the settings-snippet expected-dict (three new
+  hook→event rows) and the stateful-hook consistency tuple (recall hook). Suite: 111 → 163.
 
 ## v1.7 — 2026-07-07
 

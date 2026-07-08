@@ -158,6 +158,25 @@ def parse_file(path, scope, project, mtime):
 # ---------------------------------------------------------------------------
 # DB open + FTS5 probe/degradation
 # ---------------------------------------------------------------------------
+class CorruptIndex(Exception):
+    """The index file exists but is not a readable sqlite database (partial write,
+    disk-full mid-write, a sync/backup tool clobbering it). The index is DISPOSABLE,
+    so mutating commands unlink+recreate it and read paths handle it gracefully —
+    neither should traceback."""
+
+
+def _enable_wal(conn):
+    """Best-effort WAL. WAL lets the read-only recall hook read a snapshot CONCURRENTLY
+    with an index writer instead of blocking on the writer's exclusive lock (rollback
+    mode) and failing open under a full rebuild. Never confuse a WAL-unsupported
+    filesystem (some network mounts) with corruption — corruption is detected by
+    ensure_schema's CREATE, not here — so this is best-effort and swallows errors."""
+    try:
+        conn.execute("PRAGMA journal_mode=WAL")
+    except sqlite3.DatabaseError:
+        pass  # WAL unavailable on this FS — rollback journal still works
+
+
 def _fts_available(conn):
     if os.environ.get("FABLE_MEM_FORCE_DEGRADED") == "1":
         return False
@@ -192,20 +211,48 @@ def ensure_schema(conn):
     return mode
 
 
-def open_db(base=None, readonly=False):
-    """Return (conn, mode). Creates the DB (and $BASE/memory/) if absent."""
+def open_db(base=None, readonly=False, recreate_on_corrupt=False):
+    """Return (conn, mode). Creates the DB (and $BASE/memory/) if absent.
+
+    A corrupt/unreadable index raises sqlite3.DatabaseError on the first statement.
+    Because the index is DISPOSABLE, a mutating caller (index/stats/gc-scan) passes
+    recreate_on_corrupt=True so it unlinks+recreates the file and succeeds; read paths
+    (search/show/doctor) leave recreate off and catch CorruptIndex to fail gracefully
+    instead of tracebacking. The readonly path also honors FABLE_MEM_FORCE_DEGRADED so
+    the degraded escape hatch actually forces a degraded (LIKE) search instead of
+    silently ranking against a possibly-stale fts5 table."""
     path = db_path(base)
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if readonly and os.path.exists(path):
         conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=5)
+        if os.environ.get("FABLE_MEM_FORCE_DEGRADED") == "1":
+            return conn, "degraded-like"
         mode = "fts5"
         try:
             conn.execute("SELECT 1 FROM mem_fts LIMIT 1")
-        except sqlite3.OperationalError:
+        except sqlite3.OperationalError:   # subclass of DatabaseError — list first
             mode = "degraded-like"
+        except sqlite3.DatabaseError:      # file is not a database => corrupt
+            conn.close()
+            raise CorruptIndex(path)
         return conn, mode
     conn = sqlite3.connect(path, timeout=10)
-    mode = ensure_schema(conn)
+    try:
+        mode = ensure_schema(conn)
+    except sqlite3.DatabaseError:
+        conn.close()
+        if not recreate_on_corrupt:
+            raise CorruptIndex(path)
+        try:
+            os.remove(path)                # disposable — reconstruct from the corpus
+            for side in (path + "-wal", path + "-shm"):
+                if os.path.exists(side):
+                    os.remove(side)        # drop stale WAL sidecars of the dead db
+        except OSError:
+            raise CorruptIndex(path)
+        conn = sqlite3.connect(path, timeout=10)
+        mode = ensure_schema(conn)
+    _enable_wal(conn)
     return conn, mode
 
 
@@ -263,6 +310,15 @@ def run_index(conn, mode, rebuild=False):
         conn.execute("DELETE FROM memories")
         if mode == "fts5":
             conn.execute("DELETE FROM mem_fts")
+        else:
+            # Degraded rebuild: clear any stale rows a prior fts5 build left behind so
+            # a later readonly search (which detects mode by the table's presence) can
+            # never rank against orphaned FTS content. Best-effort — the table may not
+            # exist at all in a from-scratch degraded corpus.
+            try:
+                conn.execute("DELETE FROM mem_fts")
+            except sqlite3.OperationalError:
+                pass
         conn.commit()
     seen = set()
     changed = 0
@@ -293,7 +349,10 @@ def run_index(conn, mode, rebuild=False):
 
 
 def cmd_index(args):
-    conn, mode = open_db()
+    # Mutating command: a corrupt index is unlinked+recreated so `index --rebuild`
+    # genuinely "reconstructs it from the corpus at any time" (the module guarantee),
+    # and the SessionEnd reindex self-heals instead of leaving recall permanently dead.
+    conn, mode = open_db(recreate_on_corrupt=True)
     changed, total, pruned = run_index(conn, mode, rebuild=args.rebuild)
     conn.close()
     verb = "rebuilt" if args.rebuild else "indexed"
@@ -305,13 +364,20 @@ def cmd_index(args):
 # ---------------------------------------------------------------------------
 # search / show / stats
 # ---------------------------------------------------------------------------
+# Unicode word token: letters/digits across ALL scripts (accented Latin, CJK, …),
+# excluding "_", to MATCH the fts5 unicode61 tokenizer the index is built with. An
+# ASCII-only [A-Za-z0-9]+ truncates "Café" to "Caf" (never matches indexed "café")
+# and yields zero tokens for "日本語", silently returning no hits for non-English queries.
+WORD = re.compile(r"[^\W_]+", re.UNICODE)
+
+
 def keywords(text):
-    return [t for t in re.findall(r"[A-Za-z0-9]+", text.lower())
+    return [t for t in WORD.findall(text.lower())
             if len(t) > 2 and t not in STOPWORDS]
 
 
 def _fts_match(query):
-    toks = re.findall(r"[A-Za-z0-9]+", query)
+    toks = WORD.findall(query)
     if not toks:
         return None
     return " OR ".join('"%s"' % t for t in toks)
@@ -378,7 +444,13 @@ def search(base_conn_mode, query, scope="all", limit=DEFAULT_LIMIT):
 
 def cmd_search(args):
     query = " ".join(args.query)
-    conn, mode = open_db(readonly=True)
+    try:
+        conn, mode = open_db(readonly=True)
+    except CorruptIndex:
+        # Read path: a corrupt index yields no hits (recoverable via `index --rebuild`).
+        if args.json:
+            print("[]")
+        return 0
     hits = search((conn, mode), query, scope=args.scope, limit=args.limit)
     conn.close()
     if args.json:
@@ -399,7 +471,12 @@ def cmd_search(args):
 
 
 def cmd_show(args):
-    conn, _ = open_db(readonly=True)
+    try:
+        conn, _ = open_db(readonly=True)
+    except CorruptIndex:
+        print("index unreadable — run `mem.py index --rebuild` to reconstruct it",
+              file=sys.stderr)
+        return 1
     row = conn.execute(
         "SELECT id, name, description, path, scope, project, type, created, "
         "verified, visibility, mtime, body FROM memories WHERE id=?", (args.id,)
@@ -425,7 +502,7 @@ def cmd_show(args):
 
 
 def cmd_stats(args):
-    conn, mode = open_db()
+    conn, mode = open_db(recreate_on_corrupt=True)
     g = conn.execute("SELECT COUNT(*) FROM memories WHERE scope='global'").fetchone()[0]
     p = conn.execute("SELECT COUNT(*) FROM memories WHERE scope='project'").fetchone()[0]
     projects = conn.execute(
@@ -466,7 +543,10 @@ def load_privacy_patterns(base=None):
     pats = data.get("patterns") or []
     if not isinstance(pats, list):
         return [], path, "patterns-not-a-list"
-    return [str(x) for x in pats], path, None
+    # Drop blank/whitespace-only patterns: compile_marker("") -> a regex that matches
+    # (nearly) every file, which would make `doctor --privacy` false-positive a leak on
+    # a totally clean corpus. Mirrors the guard's load_patterns() `.strip()` filter.
+    return [str(x) for x in pats if str(x).strip()], path, None
 
 
 def privacy_scan(base=None):
@@ -485,7 +565,17 @@ def privacy_scan(base=None):
         return 0, ["privacy: no patterns configured in %s" % path]
     markers = [(p, compile_marker(p)) for p in pats]
     hits = []
-    for f in sorted(glob.glob(os.path.join(memory_dir(base), "*.md"))):
+    # Sweep the WHOLE global corpus dir, not just *.md: the SessionEnd journal
+    # (journal.ndjson / journal.1.ndjson) records cwd + git branch verbatim into this
+    # same shared dir, and branch names / work paths are exactly work-marker shaped. A
+    # detective backstop that only globs *.md is blind to that leak, so anyone who
+    # promotes/shares/backs-up ~/.claude/memory/ ships those markers unflagged.
+    mdir = memory_dir(base)
+    scan_files = sorted(
+        glob.glob(os.path.join(mdir, "*.md"))
+        + glob.glob(os.path.join(mdir, "*.ndjson"))
+    )
+    for f in scan_files:
         try:
             with open(f, encoding="utf-8", errors="replace") as fh:
                 text = fh.read()
@@ -503,10 +593,27 @@ def privacy_scan(base=None):
 
 def cmd_doctor(args):
     # Must create the DB and exit 0 on a fresh, empty corpus.
-    conn, mode = open_db()
-    total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
-    conn.close()
     mdir = memory_dir()
+    try:
+        conn, mode = open_db()
+        total = conn.execute("SELECT COUNT(*) FROM memories").fetchone()[0]
+        conn.close()
+    except CorruptIndex:
+        # Diagnose, never traceback: doctor's whole job is to report health.
+        print("mode=corrupt")
+        print("memory_dir=%s (writable=%s)"
+              % (mdir, "yes" if os.access(mdir, os.W_OK) else "no"))
+        print("db=%s" % db_path())
+        print("index corrupt — the index file is unreadable; delete it or run "
+              "`mem.py index --rebuild` to reconstruct it from the corpus")
+        print("privacy_toml=%s"
+              % ("present" if os.path.exists(privacy_path()) else "absent"))
+        if args.privacy:
+            code, lines = privacy_scan()   # scans corpus FILES, not the db — still valid
+            for ln in lines:
+                print(ln)
+            return code or 1
+        return 1
     writable = os.access(mdir, os.W_OK)
     ppath = privacy_path()
     print("mode=%s" % mode)
@@ -546,7 +653,7 @@ def _memory_age_days(created, verified, mtime):
 
 
 def gc_scan(base=None):
-    conn, mode = open_db(base)
+    conn, mode = open_db(base, recreate_on_corrupt=True)
     run_index(conn, mode)  # refresh index (corpus files untouched — read-only w.r.t. corpus)
     rows = conn.execute(
         "SELECT id, path, scope, name, description, type, created, verified, mtime, body "

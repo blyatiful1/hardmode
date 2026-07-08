@@ -104,6 +104,34 @@ def test_gitless_cwd_is_safe(tmp_path):
     assert "git_root" not in entry
 
 
+def test_slow_git_still_writes_the_breadcrumb_within_budget(tmp_path):
+    # A fake `git` that sleeps longer than the per-call timeout: the total git budget
+    # must bound all three calls so the breadcrumb is appended well under the 10s
+    # SessionEnd kill (was: 3x5s of git could exceed 10s and lose the line entirely).
+    import time
+    fakebin = tmp_path / "fakebin"
+    fakebin.mkdir()
+    (fakebin / "git").write_text("#!/bin/sh\nsleep 3\necho fake\n")
+    (fakebin / "git").chmod(0o755)
+    work = tmp_path / "work"
+    work.mkdir()
+
+    env = dict(os.environ, CLAUDE_DIR=str(tmp_path),
+               PATH=str(fakebin) + os.pathsep + os.environ["PATH"])
+    payload = {"session_id": "s", "cwd": str(work), "reason": "clear"}
+    start = time.monotonic()
+    r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                       capture_output=True, text=True, timeout=30, env=env)
+    elapsed = time.monotonic() - start
+
+    assert r.returncode == 0, r.stderr
+    assert elapsed < 9, "git budget overran the SessionEnd window: %.1fs" % elapsed
+    lines = read_lines(journal_path(tmp_path))
+    assert len(lines) == 1                       # breadcrumb durable despite slow git
+    entry = json.loads(lines[0])
+    assert entry["reason"] == "clear" and "ts" in entry
+
+
 def test_malformed_stdin_fails_open(tmp_path):
     r = run_hook(tmp_path, raw_stdin="not json")
     assert r.returncode == 0

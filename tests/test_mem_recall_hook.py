@@ -112,15 +112,51 @@ def test_sessions_are_isolated(tmp_path):
     assert injected_context(b) is not None  # a different session is not deduped
 
 
-def test_stale_index_stays_silent(tmp_path):
+def test_mid_session_write_does_not_mute_recall(tmp_path):
+    # A newer-than-index corpus file used to make recall go fully dark for the rest
+    # of the session (any mid-session bank / native MEMORY.md write). It must NOT:
+    # pointers are cheap, so slightly-stale hits still serve.
     seed_pooling_corpus(tmp_path, n=3)
-    # Make a corpus file newer than the index => staleness => silence, never build.
     future = time.time() + 3600
-    target = Path(tmp_path) / "memory" / "pool1.md"
-    os.utime(target, (future, future))
+    os.utime(Path(tmp_path) / "memory" / "pool1.md", (future, future))
     r = run_hook(tmp_path, tmp_path / "state", POOLING_PROMPT)
     assert r.returncode == 0, r.stderr
-    assert injected_context(r) is None
+    assert injected_context(r) is not None  # still serves despite the newer file
+
+
+def test_future_mtime_does_not_permanently_disable_recall(tmp_path):
+    # A single far-future corpus mtime (Syncthing/rsync clock skew) used to disable
+    # recall permanently, surviving even a rebuild. It must not.
+    seed_pooling_corpus(tmp_path, n=3)
+    far_future = time.time() + 10 * 365 * 86400
+    os.utime(Path(tmp_path) / "memory" / "pool1.md", (far_future, far_future))
+    build_index(tmp_path)  # rebuild — index mtime is "now", still < the 2035 file mtime
+    r = run_hook(tmp_path, tmp_path / "state", POOLING_PROMPT)
+    assert r.returncode == 0, r.stderr
+    assert injected_context(r) is not None
+
+
+def test_dead_pointer_is_not_surfaced(tmp_path):
+    # A memory deleted mid-session (index not yet refreshed) must not send the caller
+    # to a missing path — that single hit is dropped, not the whole recall.
+    seed_pooling_corpus(tmp_path, n=1)
+    (Path(tmp_path) / "memory" / "pool1.md").unlink()
+    r = run_hook(tmp_path, tmp_path / "state", POOLING_PROMPT)
+    assert r.returncode == 0, r.stderr
+    assert injected_context(r) is None  # the only hit's file is gone => nothing to show
+
+
+def test_non_ascii_prompt_recalls(tmp_path):
+    # The query tokenizer must match the unicode61 index, or non-English prompts
+    # silently recall nothing even when the content is indexed.
+    gdir = Path(tmp_path) / "memory"
+    write_memory(gdir, "cafe.md", "Café menu decision",
+                 "localización 日本語 café notes", body=BODY_SENTINEL)
+    build_index(tmp_path)
+    r = run_hook(tmp_path, tmp_path / "state", "café 日本語 localización")
+    assert r.returncode == 0, r.stderr
+    ctx = injected_context(r)
+    assert ctx is not None and "cafe.md" in ctx
 
 
 def test_token_and_char_budget_respected(tmp_path):
@@ -135,7 +171,7 @@ def test_token_and_char_budget_respected(tmp_path):
     ctx = injected_context(r)
     assert ctx is not None
     assert len(ctx) < 3200            # well under the ~600-token / 10k budget
-    assert "…" in ctx or len(ctx) < 3200  # long descriptions are clamped
+    assert "…" in ctx                 # the 6000-char description was clamped with an ellipsis
 
 
 def test_malformed_stdin_fails_open(tmp_path):

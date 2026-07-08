@@ -13,7 +13,7 @@ jobs:
         run: bash -n install.sh tools/doctor.sh bench/run.sh bench/task/verify.sh
 
       - name: Python components compile
-        run: python3 -m py_compile claude/hooks/*.py bench/score.py bench/task/loglib/*.py
+        run: python3 -m py_compile claude/hooks/*.py claude/cli/*.py bench/score.py bench/task/loglib/*.py
 
       - name: Settings snippet is valid JSON
         run: python3 -c "import json; json.load(open('claude/settings/settings-snippet.json'))"

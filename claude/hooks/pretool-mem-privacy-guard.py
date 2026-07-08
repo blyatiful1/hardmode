@@ -12,8 +12,12 @@ WHY THIS EXISTS
     (exit 2 — the tool does NOT run) on any hit, BEFORE the marker can land. Writes
     outside the global corpus, and clean payloads, pass untouched.
 
-    This is prevention at write time; `mem.py doctor --privacy` is the detective
-    backstop that sweeps already-written content.
+    SCOPE (not a jail): this matches the Write/Edit/MultiEdit tools only. A promotion
+    done through Bash (`cp`/`mv`/`cat >> ~/.claude/memory/x.md`) or an interpreter
+    (`python3 -c`) does NOT carry a `file_path`/`content` this hook can see, so it is
+    not scanned at write time — the same interpreter-bypass class the kit's other
+    guards document. `mem.py doctor --privacy` is the detective backstop that sweeps
+    already-written content (now including the .ndjson journal) and catches those.
 
 FAIL-OPEN GUARANTEE
     A guard that breaks sessions costs more than it saves. Every failure mode —
@@ -52,14 +56,37 @@ def resolve_target(file_path, cwd):
     return os.path.realpath(fp)
 
 
+def _fs_case_insensitive(path):
+    """True if `path` lives on a case-insensitive filesystem (macOS APFS/HFS+ default,
+    Windows). Probed precisely — a case-variant of an existing path resolving to the
+    SAME file — so we case-fold ONLY where the fs actually would, never false-blocking a
+    genuinely distinct `Memory/` sibling on a case-sensitive Linux fs. Overridable with
+    FABLE_MEM_FS_CASE_INSENSITIVE=1/0 (test seam + manual escape hatch)."""
+    forced = os.environ.get("FABLE_MEM_FS_CASE_INSENSITIVE")
+    if forced is not None:
+        return forced == "1"
+    try:
+        alt = path.upper() if path != path.upper() else path.lower()
+        return (path != alt and os.path.exists(path) and os.path.exists(alt)
+                and os.path.samefile(path, alt))
+    except OSError:
+        return False
+
+
 def under_global_corpus(target, base):
     """True iff `target` is the global memory dir or a file within it. realpath on
-    both sides so a symlinked corpus is compared by its true location."""
+    both sides so a symlinked corpus is compared by its true location. On a
+    case-insensitive fs, `$BASE/Memory/leak.md` addresses the SAME dir as
+    `$BASE/memory/` (which mem.py's *.md glob would then index), so the comparison
+    case-folds there — otherwise a capitalized path would slip a marker past the guard."""
     if not target:
         return False
     corpus = os.path.realpath(memory_dir(base))
+    a, b = target, corpus
+    if _fs_case_insensitive(corpus):
+        a, b = a.lower(), b.lower()
     try:
-        return os.path.commonpath([target, corpus]) == corpus
+        return os.path.commonpath([a, b]) == b
     except ValueError:
         return False  # different drives / not comparable
 

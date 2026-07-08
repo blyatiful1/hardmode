@@ -191,6 +191,120 @@ def test_doctor_privacy_clean_corpus_exits_zero(tmp_path):
     assert "clean" in r.stdout
 
 
+def test_doctor_privacy_blank_pattern_does_not_false_positive(tmp_path):
+    # A stray empty string in privacy.toml patterns compiles to a match-everything
+    # regex; the blank-filter must drop it so a totally clean corpus stays clean
+    # (was: phantom "FOUND 1 hit" on every file, exit 1).
+    (global_dir(tmp_path)).mkdir(parents=True, exist_ok=True)
+    (global_dir(tmp_path) / "privacy.toml").write_text('patterns = ["", "  "]\n')
+    write_memory(global_dir(tmp_path), "clean.md", "Clean memory",
+                 "no markers at all here")
+    r = run(tmp_path, "doctor", "--privacy")
+    assert r.returncode == 0, r.stdout
+    assert "FOUND" not in r.stdout
+
+
+def test_doctor_privacy_scans_the_ndjson_journal(tmp_path):
+    # The SessionEnd journal (journal.ndjson) records cwd/branch verbatim into the
+    # shared corpus dir; the detective sweep must see it, not only *.md.
+    (global_dir(tmp_path)).mkdir(parents=True, exist_ok=True)
+    (global_dir(tmp_path) / "privacy.toml").write_text('patterns = ["ACME-*"]\n')
+    (global_dir(tmp_path) / "journal.ndjson").write_text(
+        '{"ts":"x","cwd":"/work/acme","branch":"feature/ACME-1234-fix"}\n')
+    r = run(tmp_path, "doctor", "--privacy")
+    assert r.returncode != 0
+    assert "journal.ndjson" in r.stdout
+
+
+# ---------------------------------------------------------------------------
+# non-ASCII search — query tokenizer must match the unicode61 index
+# ---------------------------------------------------------------------------
+def test_search_matches_non_ascii_query(tmp_path):
+    write_memory(global_dir(tmp_path), "cafe.md", "Café menu decision",
+                 "localización notes 日本語 about the café")
+    run(tmp_path, "index")
+    for term in ("Café", "café", "日本語", "localización"):
+        hits = json.loads(run(tmp_path, "search", term, "--json").stdout)
+        assert any(h["slug"] == "cafe" for h in hits), "no hit for %r" % term
+
+
+# ---------------------------------------------------------------------------
+# corrupt index — disposable, so mutating commands self-heal, reads fail soft
+# ---------------------------------------------------------------------------
+def corrupt_the_db(claude_dir):
+    db = global_dir(claude_dir) / "mem-index.db"
+    db.write_bytes(os.urandom(4096))  # not a sqlite file anymore
+
+
+def test_index_rebuild_recovers_from_a_corrupt_db(tmp_path):
+    write_memory(global_dir(tmp_path), "a.md", "Alpha decision", "retry backoff")
+    run(tmp_path, "index")
+    corrupt_the_db(tmp_path)
+    r = run(tmp_path, "index", "--rebuild")
+    assert r.returncode == 0, r.stderr   # rebuild reconstructs from the corpus
+    assert "rebuilt" in r.stdout
+    hits = json.loads(run(tmp_path, "search", "retry", "--json").stdout)
+    assert any(h["slug"] == "a" for h in hits)
+
+
+def test_doctor_reports_a_corrupt_index_without_tracebacking(tmp_path):
+    write_memory(global_dir(tmp_path), "a.md", "Alpha", "x")
+    run(tmp_path, "index")
+    corrupt_the_db(tmp_path)
+    r = run(tmp_path, "doctor")
+    assert r.returncode == 1
+    assert "mode=corrupt" in r.stdout
+    assert "rebuild" in r.stdout.lower()
+    assert "Traceback" not in r.stderr
+
+
+def test_search_on_a_corrupt_index_returns_no_hits(tmp_path):
+    write_memory(global_dir(tmp_path), "a.md", "Alpha", "x")
+    run(tmp_path, "index")
+    corrupt_the_db(tmp_path)
+    r = run(tmp_path, "search", "alpha", "--json")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == []
+    assert "Traceback" not in r.stderr
+
+
+def test_stats_recreates_a_corrupt_index(tmp_path):
+    write_memory(global_dir(tmp_path), "a.md", "Alpha", "x")
+    run(tmp_path, "index")
+    corrupt_the_db(tmp_path)
+    r = run(tmp_path, "stats")
+    assert r.returncode == 0, r.stderr   # heals the disposable index, reports empty
+    assert "Traceback" not in r.stderr
+
+
+# ---------------------------------------------------------------------------
+# WAL + degraded escape hatch
+# ---------------------------------------------------------------------------
+def test_index_uses_wal_journal_mode(tmp_path):
+    import sqlite3
+    write_memory(global_dir(tmp_path), "a.md", "Alpha", "x")
+    run(tmp_path, "index")
+    db = global_dir(tmp_path) / "mem-index.db"
+    mode = sqlite3.connect(str(db)).execute("PRAGMA journal_mode").fetchone()[0]
+    assert mode.lower() == "wal"  # readers read a snapshot instead of blocking a writer
+
+
+def test_force_degraded_search_never_serves_stale_fts(tmp_path):
+    env = {"FABLE_MEM_FORCE_DEGRADED": "1"}
+    # Build a real fts5 index containing a token...
+    f = write_memory(global_dir(tmp_path), "a.md", "Lesson alpha", "quokkatoken sizing")
+    run(tmp_path, "index", "--rebuild")
+    # ...then remove the token from the corpus and rebuild in degraded mode.
+    f.write_text("---\nname: Lesson alpha\ndescription: walrusword replaced\n---\nbody\n",
+                 encoding="utf-8")
+    run(tmp_path, "index", "--rebuild", env_extra=env)
+    # A degraded search must reflect the fresh corpus, not the stale fts5 rows.
+    stale = json.loads(run(tmp_path, "search", "quokkatoken", "--json", env_extra=env).stdout)
+    assert stale == []
+    fresh = json.loads(run(tmp_path, "search", "walrusword", "--json", env_extra=env).stdout)
+    assert any(h["slug"] == "a" for h in fresh)
+
+
 # ---------------------------------------------------------------------------
 # gc-scan — mechanical proposals (read-only)
 # ---------------------------------------------------------------------------

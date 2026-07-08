@@ -88,6 +88,34 @@ def test_path_traversal_out_of_corpus_is_not_blocked(tmp_path):
     assert r.returncode == 0
 
 
+def test_case_insensitive_fs_variant_path_is_blocked(tmp_path):
+    # On a case-insensitive fs (macOS APFS/HFS+), $BASE/Memory/ IS $BASE/memory/, so a
+    # capitalized target must not slip a marker past the guard. Forced via the env seam
+    # since the CI fs is case-sensitive.
+    write_privacy(tmp_path, ["ACME-*"])
+    variant = Path(tmp_path) / "Memory" / "leak.md"     # capital M
+    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), FABLE_MEM_FS_CASE_INSENSITIVE="1")
+    payload = {"tool_name": "Write",
+               "tool_input": {"file_path": str(variant), "content": "secret ACME-1234"}}
+    r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                       capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 2
+    assert "MEMORY PRIVACY GUARD" in r.stderr
+
+
+def test_case_sensitive_fs_variant_path_is_allowed(tmp_path):
+    # With case-sensitivity forced off, $BASE/Memory/ is a genuinely distinct dir and
+    # must NOT be blocked (no false-block of a real sibling on Linux).
+    write_privacy(tmp_path, ["ACME-*"])
+    variant = Path(tmp_path) / "Memory" / "leak.md"
+    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), FABLE_MEM_FS_CASE_INSENSITIVE="0")
+    payload = {"tool_name": "Write",
+               "tool_input": {"file_path": str(variant), "content": "secret ACME-1234"}}
+    r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
+                       capture_output=True, text=True, timeout=30, env=env)
+    assert r.returncode == 0
+
+
 def test_malformed_stdin_fails_open(tmp_path):
     write_privacy(tmp_path, ["ACME-*"])
     r = run_hook(tmp_path, raw_stdin="not json")
