@@ -46,6 +46,9 @@ def test_hooks_are_wired_to_the_right_events():
         "pretool-destructive-guard.py": "PreToolUse",
         "precompact-save-task.py": "PreCompact",
         "sessionstart-compact-recovery.py": "SessionStart",
+        "userpromptsubmit-mem-recall.py": "UserPromptSubmit",
+        "sessionend-mem-journal.py": "SessionEnd",
+        "pretool-mem-privacy-guard.py": "PreToolUse",
     }
     actual = {c.split("/")[-1]: e for e, _, c in wired_commands(load_snippet())}
     assert actual == expected

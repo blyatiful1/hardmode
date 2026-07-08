@@ -59,6 +59,41 @@ for d in "$SRC"/skills/*/; do
   [ "$complete" -eq 1 ] && [ "$drifted" -eq 0 ] && ok "skill: $name"
 done
 
+# 2b. The mem CLI is a NEW component KIND — none of the four globs above (hooks/agents/
+# workflows/skills) cover claude/cli/, so it gets a hand-written check: file present,
+# compiles, and its own self-diagnostic runs clean on a fresh (corpus-less) install,
+# reporting its FTS mode (fts5 / degraded-like). The three mem hooks (recall, journal,
+# privacy-guard) are ordinary claude/hooks/*.py and are ALREADY covered by the hooks
+# glob above — do not re-check them here.
+MEM="$DST/cli/mem.py"
+if [ ! -f "$MEM" ]; then
+  bad "mem CLI missing: $MEM (re-run ./install.sh)"
+elif ! python3 -m py_compile "$MEM" 2>/dev/null; then
+  bad "mem CLI does not compile: $MEM"
+else
+  out="$(CLAUDE_DIR="$DST" python3 "$MEM" doctor 2>/dev/null)"; rc=$?
+  mode="$(printf '%s\n' "$out" | sed -n 's/^mode=//p')"
+  if [ "$rc" -eq 0 ]; then
+    ok "mem CLI (mode=${mode:-unknown})"
+  else
+    bad "mem CLI self-check failed: CLAUDE_DIR=$DST python3 $MEM doctor"
+  fi
+fi
+
+# Memory corpus dir writable + privacy pattern seed present.
+MEMDIR="$DST/memory"
+if mkdir -p "$MEMDIR" 2>/dev/null && touch "$MEMDIR/.doctor-probe" 2>/dev/null; then
+  rm -f "$MEMDIR/.doctor-probe"
+  ok "memory dir writable: $MEMDIR"
+else
+  bad "memory dir not writable: $MEMDIR — recall + journal re-indexing will be inert"
+fi
+if [ -f "$MEMDIR/privacy.toml" ]; then
+  ok "privacy.toml present"
+else
+  warn "privacy.toml missing in $MEMDIR — the privacy guard has no patterns to match (fails open)"
+fi
+
 # 3. Doctrine is loadable.
 if grep -q "Evidence before claims" "$DST/CLAUDE.md" 2>/dev/null; then
   ok "doctrine present in CLAUDE.md"
