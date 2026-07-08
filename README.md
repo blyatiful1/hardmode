@@ -49,6 +49,12 @@ claude/
                                self-contained HTML previews → distinct-lens judges
                                (+ German-compliance judge when the brief says German)
                                → synthesis: winner + what to graft from the losers
+    memory-review.js           /memory-review — mine the session journal for
+                               high-activity sessions that banked nothing → propose
+                               capture candidates (on-demand; proposes, never writes)
+    memory-gc.js               /memory-gc — corpus-health sweep: mechanical gc-scan +
+                               three-way contradiction judges + date-absolutize +
+                               index rebuild; proposals only, never deletes
   skills/
     fable/                     the flagship: full staged protocol for hard tasks (/fable)
     webdesign/                 web design protocol: explicit design views (static /
@@ -59,7 +65,10 @@ claude/
                                (live-researched, sources cited, claims adversarially
                                verified at authoring time)
     orchestrate/               multi-agent workflow authoring playbook
-    postmortem/                distill lessons into persistent memory
+    postmortem/                distill lessons into persistent memory (promote the
+                               cross-project ones global — explicit + one-line why)
+    memory-search/             search the machine-wide cross-project corpus before
+                               re-deriving a decision already made in another repo
   hooks/
     stop-claim-audit.py        blocks the first "done/verified" stop after file edits
                                (Edit/Write or file-writing Bash), forces one audit pass
@@ -81,7 +90,23 @@ claude/
                                compaction (per-session state file)
     sessionstart-compact-recovery.py  post-compaction injection: recovery protocol +
                                the saved original request + the ACTUAL git state
-  settings/settings-snippet.json   effortLevel xhigh + all six hooks wired to their events
+    userpromptsubmit-mem-recall.py  cross-project memory recall: one read-only FTS
+                               query per prompt injects ≤3 memory pointers (title +
+                               description + path, never bodies) as inert refs —
+                               threshold-gated, per-session dedupe, fail-open
+    sessionend-mem-journal.py  appends one NDJSON breadcrumb per session +
+                               incremental reindex, so this session's memory is
+                               searchable in the next one; git-bounded, fail-open
+    pretool-mem-privacy-guard.py  blocks a Write/Edit into the global corpus whose
+                               pending content hits a privacy.toml work-marker — the
+                               deterministic project→global promotion gate
+  cli/                         standalone CLI (new component kind, stdlib-only)
+    mem.py                     the fable-mem index/recall CLI (sqlite3 FTS5, no pip):
+                               index · search · show · stats · doctor · gc-scan over
+                               the global + every per-repo corpus
+    privacy.toml.example       work-marker patterns; installed to
+                               ~/.claude/memory/privacy.toml only if absent
+  settings/settings-snippet.json   effortLevel xhigh + all nine hooks wired to their events
   settings/settings-snippet-small.json  same, plus FABLE_LOOP_THRESHOLD=2 for small drivers
 install.sh                     copies into ~/.claude with out-of-tree backups; idempotent;
                                never edits settings. Small-driver flags: --tier small
@@ -106,6 +131,45 @@ mode from #63861, reproduced on demand); with the claim-audit gate, **4/4 runs s
 with zero false claims**, and in one run the transcript shows the gate directly rescuing a
 would-be false claim — the model tried to stop, got blocked, ran the check it had skipped,
 and fixed the bug it had shipped. Small n, honest stats in the file.
+
+## Cross-project memory (fable-mem)
+
+Claude Code's native auto-memory is per-git-repo: a decision banked in repo A is invisible
+while you work in repo B, so the same wheel gets reinvented across projects. fable-mem layers
+a machine-wide memory corpus **on top of** the native one — never wrapping it, only adding a
+shared, searchable cross-project surface at `~/.claude/memory/` (unclaimed by any native
+feature). It carries the same discipline as the rest of the kit: deterministic where it must
+hold, quiet where it would annoy, fail-open everywhere.
+
+- **Recall without asking.** A UserPromptSubmit hook runs one read-only FTS5 query against a
+  local sqlite index and injects at most three memory pointers (title + one-line description
+  + path — never bodies) as inert, labelled reference data. Threshold-gated, ~600-token
+  budget, per-session dedupe: silence over noise. Cross-repo, so a lesson from project A
+  surfaces while you work in project B.
+- **A breadcrumb every session.** A SessionEnd hook appends one NDJSON line (timestamp, cwd,
+  git root + branch + dirty-file count, end reason) to `~/.claude/memory/journal.ndjson` — a
+  deterministic trace even when the session banked nothing — then runs an incremental reindex
+  so this session's memory is searchable in the next. `/memory-review` mines that journal for
+  high-activity sessions that banked nothing and proposes what was worth keeping.
+- **The promotion boundary is a hook, not a rule.** The one line that must hold is project →
+  global: a work marker (internal ticket id, private hostname, client codename) must never
+  cross into the shared corpus. A PreToolUse guard scans the pending content of any write
+  into `~/.claude/memory/` against your `privacy.toml` and blocks it (exit 2) before the
+  marker lands; `mem doctor --privacy` is the detective backstop for anything that predates
+  the guard.
+- **Hygiene that proposes, never deletes.** `mem gc-scan` mechanically flags near-duplicates,
+  stale entries, relative-date offenders, and same-topic pairs; `/memory-gc` adds three-way
+  contradiction judges and rebuilds the index. Every removal comes back as a proposal — the
+  corpus is never mutated out from under you.
+- **Verifiable install.** `./tools/doctor.sh` checks the CLI compiles and reports its FTS
+  mode, that the memory dir is writable, and that all three hooks are wired — the same
+  no-silently-inert guarantee the rest of the kit gets.
+
+The index is stdlib-only (sqlite3 FTS5, no pip/venv, no daemon or cron) and disposable —
+rebuilt from the corpus at any time. **Embeddings are a deliberate non-goal for v1**: reach
+for a vector index only when the corpus exceeds ~500 memories, or when keyword recall
+demonstrably misses on synonym-heavy queries (the right memory exists but shares no surface
+tokens with the prompt). Until then, FTS5 keyword recall carries it.
 
 ## Install
 
@@ -140,6 +204,8 @@ Finally, confirm the doctrine load in a fresh session: *"quote the first bullet 
 | Bug survives two fix attempts | `oracle` agent |
 | Work one context can't hold | `orchestrate` skill |
 | End of a debugging saga | `postmortem` skill |
+| About to re-derive a decision you may have made in another repo | `memory-search` skill — search the cross-project corpus first |
+| Cross-project memory corpus feels stale | `/memory-gc` — propose dedupes / contradictions / stale, never delete |
 
 ## Running under ultracode
 
@@ -199,6 +265,9 @@ Going the other direction — running the kit on a **smaller** driver model (a S
 - The loop-alarm hook counts a run as *failed* only when the PostToolUse payload carries an explicit exit code / error flag. If your Claude Code version omits exit information from Bash `tool_response`, the alarm is silently inert (fail-open by design) — verify once with a deliberately failing command repeated 3×.
 - The test-weakening alarm reads Edit/Write payloads, so a skip marker smuggled in via a Bash heredoc doesn't trip it at edit time — but the claim-audit gate now flags any file-writing Bash command that names a test path, so the stop-time audit still fires.
 - The destructive-command guard is a tripwire, not a jail: known bypass classes include commands wrapped in `sh -c '...'`, destructive flags hidden by quoting (`git reset '--hard'`), and some `rm -rf` variants (`~/*`, `./*`). The claim-audit gate similarly misses file writes done through interpreters (`python3 -c`) and some multi-line Bash forms. These hooks raise the cost of the documented *reflexive* failure modes; they do not stop a determined evader — pair them with the doctrine, and treat any deliberate bypass in a transcript as the incident.
+- The fable-mem session journal and its reindex run on SessionEnd, which fires on graceful exit (`/clear`, resume, logout, quit) but is **not** guaranteed on a hard crash or SIGKILL — a session killed mid-flight leaves no breadcrumb, and its memory waits for the next SessionEnd to be indexed. The corpus files are never at risk (the model writes them during the session); only the journal line and index freshness are.
+- The privacy guard's `privacy.toml` patterns are **necessary, not sufficient**: they block the markers you list, not the ones you forgot. The list ships empty and conservative so a fresh install never false-positives — which means it catches nothing until you fill in your real work markers. Treat it as a tripwire for known-shaped leaks, not a classifier, and run `mem doctor --privacy` before promoting.
+- fable-mem claims `~/.claude/memory/` because no native feature uses it: main-session auto-memory is per-repo (`~/.claude/projects/<p>/memory/`) and native "user scope" memory is **per-subagent islands** (`~/.claude/agent-memory/<name>/`), not a shared cross-project store. If a future Claude Code ships a real shared user-memory surface at that path, re-check for collision before upgrading.
 - No prompt kit closes the gap on the longest-horizon work (multi-hour autonomous runs); route those to a stronger model when available.
 - Built for Claude Code 2.1.x in mid-2026; contracts (workflow API, hook events, frontmatter) may drift. The v1.1 components were verified live on `claude-opus-4-8` + Claude Code 2.1.198 on 2026-07-02; components added since (v1.2+ hooks, doctor, small-tier profile, /big-task) are covered by the unit suite and workflow checker but have not all had a live session pass — run `./tools/doctor.sh` and the one-minute live checks after installing.
 

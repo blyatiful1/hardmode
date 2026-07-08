@@ -1,5 +1,78 @@
 # Changelog
 
+## v1.8 — 2026-07-08
+
+Memory pass: the kit stops forgetting across projects. Native auto-memory is per-git-repo,
+so a decision banked in one repo is invisible in the next — fable-mem layers a machine-wide,
+searchable memory corpus **on top of** the native one (never wrapping it) at the unclaimed
+`~/.claude/memory/`, with the kit's usual posture: deterministic where it must hold, quiet
+where it would annoy, fail-open everywhere. Embeddings stay a deliberate non-goal for v1
+(stdlib sqlite3 FTS5 only; the vector index waits for ~500 memories or demonstrated
+synonym-recall misses).
+
+### Added
+- **`cli/mem.py` — a new component kind.** A single stdlib-only Python file (sqlite3 FTS5,
+  no pip/venv) exposing `index · search · show · stats · doctor · gc-scan` over the L1 global
+  corpus (`~/.claude/memory/*.md`) AND every native per-repo corpus
+  (`~/.claude/projects/*/memory/*.md`), each row scope-tagged. FTS5 is probed at DB-open and
+  degrades to a plain-table `LIKE` scan when absent; `doctor` reports the active mode. The
+  index is disposable (rebuildable from the corpus), commits per-file so a timeout-kill
+  preserves progress, and never mutates a memory file. Because it isn't a hook/agent/
+  workflow/skill, it gets hand-written `install.sh` copy + bootstrap and `tools/doctor.sh`
+  check blocks (the four existing globs don't see it).
+- **Cross-project recall hook (`userpromptsubmit-mem-recall.py`, UserPromptSubmit).** One
+  read-only FTS query per prompt injects at most three memory pointers (title + one-line
+  description + path — never bodies) as inert, labelled reference data. Threshold-gated,
+  ~600-token budget, per-session dedupe under `FABLE_STATE_DIR`; opens the index `mode=ro`
+  and never builds on the prompt path (stale → silent). Fail-open: a malformed payload, a
+  missing/locked index, or any bug ends in `exit 0` with no output, so the prompt is never
+  lost. Prompt-injection-inert formatting (control chars stripped, quoted refs, never file
+  bodies).
+- **Session-journal hook (`sessionend-mem-journal.py`, SessionEnd).** Appends exactly one
+  NDJSON breadcrumb per session (ISO ts, cwd, git root + branch + dirty-file count, end
+  reason — computed via a hard-`timeout=`-bounded `git` subprocess, since SessionEnd carries
+  no native metadata beyond `reason`) to `~/.claude/memory/journal.ndjson`, rotates at 5MB,
+  then runs an incremental `mem index` so this session's memory is searchable next session.
+  The line is written **before** the reindex, and both settings snippets declare an explicit
+  `"timeout": 10` (the SessionEnd default is 1.5s, which would kill the hook and lose the
+  breadcrumb). Fail-open.
+- **Privacy-guard hook (`pretool-mem-privacy-guard.py`, PreToolUse on `Write|Edit|MultiEdit`).**
+  The deterministic project→global promotion gate: any write whose target resolves under
+  `~/.claude/memory/` has its pending content (`content`/`new_string`) scanned against the
+  user's `privacy.toml` work-markers; a hit `exit 2`s and blocks the write **before** the
+  marker lands. Writes outside the corpus and clean payloads pass untouched; unloadable
+  patterns fail open (a guard that can't read patterns can't honestly block). Advisory
+  SKILL.md text was never enough — under momentum the model promotes anyway.
+- **`memory-search` skill** — search the machine-wide corpus before re-deriving a decision
+  already made in another repo; when to search, when NOT (facts visible in the current
+  repo/git/CLAUDE.md), and how to promote a project lesson to global.
+- **`/memory-review` workflow** (`claude/workflows/memory-review.js`) — mines the session
+  journal for high-activity sessions that banked ZERO cross-project memories, then a
+  three-way judge PROPOSES the durable lessons worth capturing. On-demand only; proposes,
+  never writes (banking still happens explicitly via postmortem).
+- **`/memory-gc` workflow** (`claude/workflows/memory-gc.js`) — corpus-health sweep:
+  mechanical `mem gc-scan` (near-dup / stale / relative-date / same-topic candidates) →
+  LLM contradiction judges with three-way verdicts on same-topic pairs → absolutize relative
+  dates in place → rebuild the disposable index → report. NEVER deletes — every removal comes
+  back as a proposal. (The mechanical `gc-scan` layer is test-covered; the workflow's LLM
+  verdict layer is compile-checked only, like every workflow, and labelled unproven-by-harness.)
+- **`postmortem` skill → v2** — a promotion rule (project→global only when explicit, with a
+  one-line why-global; advisory, since the deterministic gate is the privacy-guard hook), a
+  `visibility: private|shareable` field, an `open-loop` memory type, and hygiene rules
+  (falsifiable conclusions, update-don't-duplicate, delete-what-evidence-refutes).
+- **`privacy.toml.example`** — conservative, ships EMPTY (necessary-not-sufficient by design);
+  `install.sh` copies it to `~/.claude/memory/privacy.toml` only if absent and bootstraps
+  `mem index --rebuild` once so the corpus is indexed before any SessionEnd fires.
+- Doctrine pointer (`claude/CLAUDE.md`): search the cross-project corpus before re-deriving,
+  promote worth-keeping lessons global via postmortem, run `/memory-gc` when the corpus feels
+  stale. README gains a fable-mem section, tree entries, playbook rows, and three Known-limits
+  entries (the SessionEnd crash gap, patterns-necessary-not-sufficient, per-subagent memory
+  islands).
+- `tests/test_mem_cli.py`, `tests/test_mem_recall_hook.py`, `tests/test_mem_journal_hook.py`,
+  `tests/test_mem_privacy_guard.py`, `tests/test_memory_skill.py`, plus the settings-snippet
+  expected-dict (three new hook→event rows) and the stateful-hook consistency tuple (recall
+  hook). Suite: 110 → 148.
+
 ## v1.7 — 2026-07-07
 
 Design pass: the kit learns to design websites, not just verify code — with the
