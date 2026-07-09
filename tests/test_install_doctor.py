@@ -6,6 +6,12 @@ import os
 import subprocess
 from pathlib import Path
 
+import pytest
+
+# The POSIX installer path; Windows covers install.ps1/doctor.ps1 in
+# test_windows_port.py instead of driving bash scripts through Git Bash.
+pytestmark = pytest.mark.skipif(os.name == "nt", reason="POSIX installer path")
+
 ROOT = Path(__file__).resolve().parents[1]
 INSTALL = ROOT / "install.sh"
 DOCTOR = ROOT / "tools" / "doctor.sh"

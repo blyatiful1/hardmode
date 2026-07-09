@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HOOK = Path(__file__).resolve().parents[1] / "claude" / "hooks" / "pretool-mem-privacy-guard.py"
 
 
@@ -103,6 +105,10 @@ def test_case_insensitive_fs_variant_path_is_blocked(tmp_path):
     assert "MEMORY PRIVACY GUARD" in r.stderr
 
 
+@pytest.mark.skipif(os.name == "nt", reason=(
+    "a genuinely distinct Memory/ sibling cannot be constructed on NTFS: realpath "
+    "case-folds Memory/ -> memory/ before the guard compares, and blocking IS "
+    "correct there — the env override models the fs, it cannot overrule it"))
 def test_case_sensitive_fs_variant_path_is_allowed(tmp_path):
     # With case-sensitivity forced off, $BASE/Memory/ is a genuinely distinct dir and
     # must NOT be blocked (no false-block of a real sibling on Linux).

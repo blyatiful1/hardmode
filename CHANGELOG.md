@@ -1,5 +1,56 @@
 # Changelog
 
+## v1.9 — 2026-07-09
+
+Windows pass + README redesign. The kit's discipline layer was always OS-portable — the
+hooks and the mem CLI are stdlib Python with `expanduser`/`os.path` throughout, and the
+privacy guard already probed for case-insensitive filesystems — but the delivery layer
+(bash installer, bash doctor, `python3 ~/...` hook commands) was POSIX-only, so on native
+Windows the kit was silently uninstallable. This release makes Windows a first-class
+install target with the same no-silently-inert guarantees, and restructures the README
+around the reader (install first, story second, inventory collapsible).
+
+### Added
+- **`install.ps1` — native Windows installer, full parity with `install.sh`.** Same
+  out-of-tree backups, same hash-based idempotency, same `.fable-manifest` skill
+  tracking with stale-file pruning, same `-Tier small` / `-StrongModel <m>` flags,
+  same never-edit-settings posture. Parity is enforced, not asserted: tests pin the
+  skill manifests byte-for-byte across both installers and require that running
+  `install.ps1` over a bash-installed tree reports everything unchanged (a dual-boot /
+  WSL+native machine must never churn backups). Python launcher discovery tries
+  `py -3`, `python`, `python3` in order and soft-fails like the bash bootstrap.
+- **`tools/doctor.ps1` — native Windows doctor, same checks and exit codes as
+  `doctor.sh`**, plus two Windows-only diagnoses: Git Bash present (on native Windows
+  it is the hook command shell — absent means every hook is inert, a FAIL), and a
+  warning when `settings.json` wires hooks through `python3` (a Unix snippet merged on
+  Windows never fires — the exact silently-inert failure the doctor exists to catch).
+- **Windows settings snippets** (`settings-snippet-windows.json`,
+  `-windows-small.json`): identical to the Unix snippets except hook commands invoke
+  `python` (Windows Pythons ship no `python3` launcher). `tests/test_windows_port.py`
+  keeps them in lockstep structurally — any drift from the tested Unix configuration
+  fails CI.
+- **`tests/test_windows_port.py`** — snippet-mirror guards (run everywhere) plus
+  pwsh-gated end-to-end tests mirroring `test_install_doctor.py`: install twice
+  (idempotent, no backup churn), user files in skill dirs preserved, formerly-shipped
+  files pruned, strong-model pin byte-identical with bash, doctor pass/fail/unwired
+  scenarios. The POSIX-installer tests now self-skip on Windows instead of driving
+  bash scripts through Git Bash.
+- **CI `windows` job** (`windows-latest`): compiles every Python component, runs
+  `install.ps1` end-to-end twice, verifies the merged install with `doctor.ps1`, and
+  runs the unit suite. The Ubuntu job additionally parse-checks both `.ps1` scripts
+  and validates all four settings snippets.
+
+### Changed
+- **README redesigned.** Install (macOS/Linux and Windows side by side, with a
+  collapsible Windows-notes block) now leads; the origin story is two paragraphs, not
+  a wall; the full annotated file tree is collapsible behind a six-row component-layer
+  table; badges + section nav on top. Every honest-limits paragraph survives, plus a
+  new one: the Windows port is CI-verified end-to-end but has not yet had a live
+  Claude Code session pass on native Windows.
+- Shipped components that name the mem CLI (`claude/CLAUDE.md` doctrine line,
+  `memory-search` skill, `/memory-gc` agent prompts) now note the Windows spelling:
+  `python` wherever a command says `python3`.
+
 ## v1.8 — 2026-07-08
 
 Memory pass: the kit stops forgetting across projects. Native auto-memory is per-git-repo,

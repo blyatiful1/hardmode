@@ -12,11 +12,30 @@ jobs:
       - name: Shell scripts parse
         run: bash -n install.sh tools/doctor.sh bench/run.sh bench/task/verify.sh
 
+      - name: PowerShell scripts parse
+        shell: pwsh
+        run: |
+          $bad = @()
+          foreach ($f in 'install.ps1', 'tools/doctor.ps1') {
+            $tokens = $null; $errors = $null
+            [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors) { $bad += "${f}:"; $bad += $errors }
+          }
+          if ($bad) { $bad | Write-Host; exit 1 }
+          Write-Host 'powershell scripts parse'
+
       - name: Python components compile
         run: python3 -m py_compile claude/hooks/*.py claude/cli/*.py bench/score.py bench/task/loglib/*.py
 
-      - name: Settings snippet is valid JSON
-        run: python3 -c "import json; json.load(open('claude/settings/settings-snippet.json'))"
+      - name: Settings snippets are valid JSON (all four)
+        run: |
+          python3 - <<'EOF'
+          import json
+          for name in ("settings-snippet.json", "settings-snippet-small.json",
+                       "settings-snippet-windows.json", "settings-snippet-windows-small.json"):
+              json.load(open(f"claude/settings/{name}"))
+          print("snippets ok")
+          EOF
 
       - name: Workflow scripts compile
         run: node tools/check-workflows.mjs
@@ -58,3 +77,45 @@ jobs:
           total=$(/tmp/bench-venv/bin/python bench/score.py /tmp/pristine-inst /tmp/bench-venv/bin/python \
             | python3 -c "import json,sys; print(json.load(sys.stdin)['total'])")
           test "$total" = "1" || { echo "pristine anchor drifted: scored $total/15, expected 1/15"; exit 1; }
+
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Python components compile
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem claude/hooks/*.py, claude/cli/*.py | ForEach-Object FullName
+          python -m py_compile @files
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
+      - name: Install script end-to-end (twice, idempotent)
+        shell: pwsh
+        run: |
+          $env:CLAUDE_DIR = Join-Path $env:RUNNER_TEMP 'fake-claude'
+          ./install.ps1 *>&1 | Out-Null
+          # install.ps1 reports via Write-Host (information stream) — merge all
+          # streams or the capture is empty and this check can never pass.
+          $second = ./install.ps1 *>&1 | Out-String
+          if ($second -notmatch 'unchanged') { Write-Host 'second run not idempotent'; exit 1 }
+          foreach ($rel in 'skills/fable/SKILL.md', 'skills/webdesign/references/german-market.md', 'cli/mem.py') {
+            if (-not (Test-Path (Join-Path $env:CLAUDE_DIR $rel))) { Write-Host "missing: $rel"; exit 1 }
+          }
+          # backups must never create loadable duplicates inside skills/
+          $installed = (Get-ChildItem (Join-Path $env:CLAUDE_DIR 'skills')).Count
+          $shipped = (Get-ChildItem claude/skills).Count
+          if ($installed -ne $shipped) { Write-Host "skills dir has $installed entries, expected $shipped"; exit 1 }
+
+      - name: Doctor verifies the merged install
+        shell: pwsh
+        run: |
+          $env:CLAUDE_DIR = Join-Path $env:RUNNER_TEMP 'fake-claude'
+          Copy-Item claude/settings/settings-snippet-windows.json (Join-Path $env:CLAUDE_DIR 'settings.json')
+          ./tools/doctor.ps1
+
+      - name: Unit tests (POSIX-installer tests self-skip)
+        shell: pwsh
+        run: |
+          python -m pip -q install pytest
+          python -m pytest tests/ -q

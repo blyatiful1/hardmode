@@ -1,10 +1,68 @@
+<div align="center">
+
 # fable-protocol
 
 **Claude Fable 5's succession kit — run Claude Opus 4.8 at Fable-grade discipline in Claude Code.**
 
+[![ci](https://github.com/blyatiful1/fable-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/blyatiful1/fable-protocol/actions/workflows/ci.yml)
+![platforms](https://img.shields.io/badge/platforms-macOS%20%C2%B7%20Linux%20%C2%B7%20Windows-555)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+Deterministic hooks where discipline **must** hold · adversarial agents and workflows where verification **matters** · cross-project memory that outlives the session
+
+[Install](#install) · [Why this works](#why-this-works) · [What's inside](#whats-inside) · [Usage playbook](#usage-playbook) · [Benchmark](#measured-not-vibes) · [Known limits](#known-limits)
+
+</div>
+
+---
+
 In July 2026, days before its retirement, Claude Fable 5 was asked to configure Claude Code so that Opus 4.8 would come as close as possible to its own level. It researched the gap, built this framework, adversarially reviewed its own work with multi-agent critique panels, and smoke-tested every component on live `claude-opus-4-8` sessions. This repo is the result, sanitized for public use.
 
 It is **not** a persona pack, not a mega-framework, and not magic. It is a small set of structural countermeasures for the specific, documented ways strong-but-mortal models fail on long-horizon agentic work.
+
+## Install
+
+Requires Claude Code ≥ 2.1.154 (saved workflows) and Python 3 — the hooks and the mem CLI are stdlib-only, no pip.
+
+### macOS / Linux
+
+```bash
+git clone https://github.com/blyatiful1/fable-protocol
+cd fable-protocol && ./install.sh
+```
+
+Merge the printed snippet into `~/.claude/settings.json`, fill in the `## This machine` section of `~/.claude/CLAUDE.md`, then **verify the install deterministically** — the settings merge is the one manual step, and a botched merge leaves every hook silently unwired:
+
+```bash
+./tools/doctor.sh
+```
+
+### Windows
+
+```powershell
+git clone https://github.com/blyatiful1/fable-protocol
+cd fable-protocol
+powershell -ExecutionPolicy Bypass -File install.ps1
+```
+
+Merge the printed snippet into `%USERPROFILE%\.claude\settings.json`, fill in `## This machine`, then verify:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\doctor.ps1
+```
+
+<details>
+<summary><b>Windows notes</b> — Git Bash, <code>python</code> vs <code>python3</code>, WSL</summary>
+
+- **`install.ps1` and `doctor.ps1` are full ports** of their bash twins — same backups, same idempotency, same checks, same exit codes. CI enforces byte-parity where it counts (skill manifests, agent pinning), so a machine that has used both installers never churns.
+- **Git for Windows is effectively required.** On native Windows, Claude Code executes hook commands through Git Bash (and needs it for its Bash tool anyway). No Git Bash → every hook is silently inert; `doctor.ps1` checks for it.
+- **The Windows snippets invoke `python`, not `python3`** — Windows Pythons ship no `python3` launcher. Confirm `python --version` works in Git Bash; if you only use the `py` launcher, replace `python ` with `py -3 ` in the hook commands when you merge. Same substitution applies to the `mem.py` commands shown in the docs.
+- **WSL users need none of this** — inside WSL you are on the Linux path: `./install.sh`.
+- Small-driver flags mirror bash: `install.ps1 -Tier small -StrongModel opus` ≡ `./install.sh --tier small --strong-model opus`.
+
+</details>
+
+Finally, confirm the doctrine load in a fresh session: *"quote the first bullet of your Evidence before claims doctrine."*
 
 ## Why this works
 
@@ -27,6 +85,18 @@ The one knob that matters: on Opus 4.8, `effortLevel: "xhigh"` is THE lever (Ant
 Full research with sources: [docs/RESEARCH.md](docs/RESEARCH.md).
 
 ## What's inside
+
+| Layer | Components | Enforcement |
+|---|---|---|
+| **Doctrine** | `CLAUDE.md` (~45 lines, lean by design) | advisory — read every session |
+| **Hooks** (9) | claim-audit gate, loop alarm, test-weakening alarm, destructive guard, compaction save/recover, memory recall/journal/privacy-guard | **deterministic** — cannot be skipped under momentum |
+| **Agents** (3) | `verifier`, `plan-critic`, `oracle` | adversarial, fresh-context, xhigh |
+| **Workflows** (8) | `/paranoid-review`, `/verify-claim`, `/deep-plan`, `/bug-hunt`, `/big-task`, `/design-variants`, `/memory-review`, `/memory-gc` | multi-agent, budget-guarded |
+| **Skills** (5) | `fable` (the flagship staged protocol), `webdesign`, `orchestrate`, `postmortem`, `memory-search` | stakes-matched ceremony |
+| **CLI** | `mem.py` — cross-project memory index/recall (sqlite FTS5, stdlib-only) | disposable index, fail-open |
+
+<details>
+<summary><b>Full annotated inventory</b></summary>
 
 ```
 claude/
@@ -106,89 +176,46 @@ claude/
                                the global + every per-repo corpus
     privacy.toml.example       work-marker patterns; installed to
                                ~/.claude/memory/privacy.toml only if absent
-  settings/settings-snippet.json   effortLevel xhigh + all nine hooks wired to their events
-  settings/settings-snippet-small.json  same, plus FABLE_LOOP_THRESHOLD=2 for small drivers
-install.sh                     copies into ~/.claude with out-of-tree backups; idempotent;
-                               never edits settings. Small-driver flags: --tier small
-                               (small snippet) and --strong-model <m> (pins the
+  settings/
+    settings-snippet.json            effortLevel xhigh + all nine hooks wired
+    settings-snippet-small.json      same, plus FABLE_LOOP_THRESHOLD=2 for small drivers
+    settings-snippet-windows.json    Windows twin of each (python, not python3) —
+    settings-snippet-windows-small.json  kept in lockstep by tests/test_windows_port.py
+install.sh                     POSIX installer: copies into ~/.claude with out-of-tree
+                               backups; idempotent; never edits settings. Small-driver
+                               flags: --tier small and --strong-model <m> (pins the
                                verification agents' frontmatter — draft cheap, verify
                                strong — durably: re-runs with the flag keep the pin)
+install.ps1                    Windows installer — full parity with install.sh
+                               (-Tier small, -StrongModel <m>)
 bench/                         A/B harness measuring the kit against stock Opus 4.8 (RESULTS.md)
-tests/                         unit tests for hooks, installer+doctor, snippet sync (CI)
+tests/                         unit tests for hooks, installers+doctors, snippet sync (CI,
+                               Linux + Windows)
 tools/check-workflows.mjs      syntax-checks the workflow scripts (CI)
 tools/doctor.sh                post-install verifier: every component present, every hook
                                actually wired in settings.json — catches the silently-inert
                                install (botched settings merge) deterministically
+tools/doctor.ps1               Windows doctor — same checks, same exit codes; also verifies
+                               Git Bash (the Windows hook shell) is present
 ```
+
+</details>
 
 ## Measured, not vibes
 
-The kit ships its own benchmark (`bench/`): a planted-bug task targeting the documented
-failure modes, run headless as stock Opus 4.8 vs Opus 4.8 + this kit, scored by a hidden
-acceptance suite. Headline from [bench/RESULTS.md](bench/RESULTS.md): stock and doctrine-only
-runs both produced **false "all verified" claims** over a red test suite (the exact failure
-mode from #63861, reproduced on demand); with the claim-audit gate, **4/4 runs scored 15/15
-with zero false claims**, and in one run the transcript shows the gate directly rescuing a
-would-be false claim — the model tried to stop, got blocked, ran the check it had skipped,
-and fixed the bug it had shipped. Small n, honest stats in the file.
+The kit ships its own benchmark (`bench/`): a planted-bug task targeting the documented failure modes, run headless as stock Opus 4.8 vs Opus 4.8 + this kit, scored by a hidden acceptance suite. Headline from [bench/RESULTS.md](bench/RESULTS.md): stock and doctrine-only runs both produced **false "all verified" claims** over a red test suite (the exact failure mode from #63861, reproduced on demand); with the claim-audit gate, **4/4 runs scored 15/15 with zero false claims**, and in one run the transcript shows the gate directly rescuing a would-be false claim — the model tried to stop, got blocked, ran the check it had skipped, and fixed the bug it had shipped. Small n, honest stats in the file.
 
 ## Cross-project memory (fable-mem)
 
-Claude Code's native auto-memory is per-git-repo: a decision banked in repo A is invisible
-while you work in repo B, so the same wheel gets reinvented across projects. fable-mem layers
-a machine-wide memory corpus **on top of** the native one — never wrapping it, only adding a
-shared, searchable cross-project surface at `~/.claude/memory/` (unclaimed by any native
-feature). It carries the same discipline as the rest of the kit: deterministic where it must
-hold, quiet where it would annoy, fail-open everywhere.
+Claude Code's native auto-memory is per-git-repo: a decision banked in repo A is invisible while you work in repo B, so the same wheel gets reinvented across projects. fable-mem layers a machine-wide memory corpus **on top of** the native one — never wrapping it, only adding a shared, searchable cross-project surface at `~/.claude/memory/` (unclaimed by any native feature). It carries the same discipline as the rest of the kit: deterministic where it must hold, quiet where it would annoy, fail-open everywhere.
 
-- **Recall without asking.** A UserPromptSubmit hook runs one read-only FTS5 query against a
-  local sqlite index and injects at most three memory pointers (title + one-line description
-  + path — never bodies) as inert, labelled reference data. Threshold-gated, ~600-token
-  budget, per-session dedupe: silence over noise. Cross-repo, so a lesson from project A
-  surfaces while you work in project B.
-- **A breadcrumb every session.** A SessionEnd hook appends one NDJSON line (timestamp, cwd,
-  git root + branch + dirty-file count, end reason) to `~/.claude/memory/journal.ndjson` — a
-  deterministic trace even when the session banked nothing — then runs an incremental reindex
-  so this session's memory is searchable in the next. `/memory-review` mines that journal for
-  high-activity sessions that banked nothing and proposes what was worth keeping.
-- **The promotion boundary is a hook, not a rule.** The one line that must hold is project →
-  global: a work marker (internal ticket id, private hostname, client codename) must never
-  cross into the shared corpus. A PreToolUse guard scans the pending content of any
-  **Write/Edit/MultiEdit** into `~/.claude/memory/` against your `privacy.toml` and blocks it
-  (exit 2) before the marker lands; it matches those tools, not Bash/interpreter writes
-  (`cp`/`cat >>`/`python3 -c`), so `mem doctor --privacy` is the detective backstop that sweeps
-  the whole corpus dir — including the `.ndjson` journal — for anything the write-time gate
-  didn't see.
-- **Hygiene that proposes, never deletes.** `mem gc-scan` mechanically flags near-duplicates,
-  stale entries, relative-date offenders, and same-topic pairs; `/memory-gc` adds three-way
-  contradiction judges and rebuilds the index. Every removal comes back as a proposal — the
-  corpus is never mutated out from under you.
-- **Verifiable install.** `./tools/doctor.sh` checks the CLI compiles and reports its FTS
-  mode, that the memory dir is writable, and that all three hooks are wired — the same
-  no-silently-inert guarantee the rest of the kit gets.
+- **Recall without asking.** A UserPromptSubmit hook runs one read-only FTS5 query against a local sqlite index and injects at most three memory pointers (title + one-line description + path — never bodies) as inert, labelled reference data. Threshold-gated, ~600-token budget, per-session dedupe: silence over noise. Cross-repo, so a lesson from project A surfaces while you work in project B.
+- **A breadcrumb every session.** A SessionEnd hook appends one NDJSON line (timestamp, cwd, git root + branch + dirty-file count, end reason) to `~/.claude/memory/journal.ndjson` — a deterministic trace even when the session banked nothing — then runs an incremental reindex so this session's memory is searchable in the next. `/memory-review` mines that journal for high-activity sessions that banked nothing and proposes what was worth keeping.
+- **The promotion boundary is a hook, not a rule.** The one line that must hold is project → global: a work marker (internal ticket id, private hostname, client codename) must never cross into the shared corpus. A PreToolUse guard scans the pending content of any **Write/Edit/MultiEdit** into `~/.claude/memory/` against your `privacy.toml` and blocks it (exit 2) before the marker lands; it matches those tools, not Bash/interpreter writes (`cp`/`cat >>`/`python3 -c`), so `mem doctor --privacy` is the detective backstop that sweeps the whole corpus dir — including the `.ndjson` journal — for anything the write-time gate didn't see.
+- **Hygiene that proposes, never deletes.** `mem gc-scan` mechanically flags near-duplicates, stale entries, relative-date offenders, and same-topic pairs; `/memory-gc` adds three-way contradiction judges and rebuilds the index. Every removal comes back as a proposal — the corpus is never mutated out from under you.
+- **Verifiable install.** The doctor scripts check the CLI compiles and report its FTS mode, that the memory dir is writable, and that all three hooks are wired — the same no-silently-inert guarantee the rest of the kit gets.
 
-The index is stdlib-only (sqlite3 FTS5, no pip/venv, no daemon or cron) and disposable —
-rebuilt from the corpus at any time. **Embeddings are a deliberate non-goal for v1**: reach
-for a vector index only when the corpus exceeds ~500 memories, or when keyword recall
-demonstrably misses on synonym-heavy queries (the right memory exists but shares no surface
-tokens with the prompt). Until then, FTS5 keyword recall carries it.
-
-## Install
-
-```bash
-git clone https://github.com/blyatiful1/fable-protocol
-cd fable-protocol && ./install.sh
-```
-
-Then merge the printed snippet into `~/.claude/settings.json` and fill in the `## This machine` section of `~/.claude/CLAUDE.md`. Requires Claude Code ≥ 2.1.154 (saved workflows).
-
-Then **verify the install deterministically** — the settings merge is the one manual step, and a botched merge leaves every hook silently unwired:
-
-```bash
-./tools/doctor.sh
-```
-
-Finally, confirm the doctrine load in a fresh session: *"quote the first bullet of your Evidence before claims doctrine."*
+The index is stdlib-only (sqlite3 FTS5, no pip/venv, no daemon or cron) and disposable — rebuilt from the corpus at any time. **Embeddings are a deliberate non-goal for v1**: reach for a vector index only when the corpus exceeds ~500 memories, or when keyword recall demonstrably misses on synonym-heavy queries (the right memory exists but shares no surface tokens with the prompt). Until then, FTS5 keyword recall carries it.
 
 ## Usage playbook
 
@@ -211,18 +238,11 @@ Finally, confirm the doctrine load in a fresh session: *"quote the first bullet 
 
 ## Running under ultracode
 
-The workflows above are saved Workflow-tool scripts, and ultracode — Claude Code's
-opt-in keyword for multi-agent orchestration — is their native habitat. The etiquette
-is asymmetric and the kit now teaches it (orchestrate skill, doctrine):
+The workflows above are saved Workflow-tool scripts, and ultracode — Claude Code's opt-in keyword for multi-agent orchestration — is their native habitat. The etiquette is asymmetric and the kit teaches it (orchestrate skill, doctrine):
 
-- **Without opt-in**, the model must never launch the Workflow tool uninvited; invoking
-  one of the kit's /commands is itself the opt-in for that run.
-- **With opt-in** (say `ultracode` in your prompt, or enable it for the session), the
-  default inverts: every substantive task gets orchestrated, one workflow per phase —
-  `/deep-plan` → `/big-task` (or inline implementation) → `/paranoid-review`, with
-  `/verify-claim` on any diagnosis along the way — reading each result before the next.
-- **Budget directives** ("+500k" in your prompt) become a hard token ceiling visible to
-  the scripts; bug-hunt, big-task, and paranoid-review stop cleanly before hitting it.
+- **Without opt-in**, the model must never launch the Workflow tool uninvited; invoking one of the kit's /commands is itself the opt-in for that run.
+- **With opt-in** (say `ultracode` in your prompt, or enable it for the session), the default inverts: every substantive task gets orchestrated, one workflow per phase — `/deep-plan` → `/big-task` (or inline implementation) → `/paranoid-review`, with `/verify-claim` on any diagnosis along the way — reading each result before the next.
+- **Budget directives** ("+500k" in your prompt) become a hard token ceiling visible to the scripts; bug-hunt, big-task, and paranoid-review stop cleanly before hitting it.
 
 ## Design principles (what this kit refuses to do)
 
@@ -254,7 +274,7 @@ npx skills add juliusbrussee/caveman --skill caveman-commit -g -a claude-code -y
 The kit targets **failure modes, not model IDs** — nothing in it hardcodes `claude-opus-4-8`. When your subscription's default model changes (an Opus 4.9/5, a Sonnet that inherits the agentic crown, or Mythos-class access), the failure-mode table above is the checklist to re-run, and three assumptions are the ones most likely to break:
 
 1. **`effortLevel: "xhigh"` semantics.** On Opus 4.8 it is THE lever; a successor may rename the levels, change the default, or recalibrate what xhigh buys. Check the model's migration guide before assuming the snippet's value is still optimal — an effort knob left at the wrong tier is either wasted spend or a silent downgrade.
-2. **Hook payload contracts.** The loop alarm keys off explicit exit codes in `tool_response`; the claim-audit gate reads `last_assistant_message` and the transcript JSONL shape; blocking relies on the exit-2 + stderr protocol. All three are Claude Code contracts, not model contracts, but they drift with CLI versions — after any major update, re-run `./tools/doctor.sh` and the one-minute live checks in Known limits.
+2. **Hook payload contracts.** The loop alarm keys off explicit exit codes in `tool_response`; the claim-audit gate reads `last_assistant_message` and the transcript JSONL shape; blocking relies on the exit-2 + stderr protocol. All three are Claude Code contracts, not model contracts, but they drift with CLI versions — after any major update, re-run the doctor script and the one-minute live checks in Known limits.
 3. **Which failure modes still exist.** The deterministic layer (hooks) is cheap insurance on any model — a stronger model just trips it less. The *ceremony* layer (multi-agent review, staged protocol) is where to downshift first: if a successor model stops producing false completion claims on the bench task, `bench/` will show it (rerun is one command), and you can retire the corresponding ceremony instead of paying for rigor the model no longer needs.
 
 The bench harness is the kit's own succession plan: measure the new model stock vs kitted, keep what still earns its cost, drop what doesn't.
@@ -270,8 +290,9 @@ Going the other direction — running the kit on a **smaller** driver model (a S
 - The fable-mem session journal and its reindex run on SessionEnd, which fires on graceful exit (`/clear`, resume, logout, quit) but is **not** guaranteed on a hard crash or SIGKILL — a session killed mid-flight leaves no breadcrumb, and its memory waits for the next SessionEnd to be indexed. The corpus files are never at risk (the model writes them during the session); only the journal line and index freshness are.
 - The privacy guard's `privacy.toml` patterns are **necessary, not sufficient**: they block the markers you list, not the ones you forgot. The list ships empty and conservative so a fresh install never false-positives — which means it catches nothing until you fill in your real work markers. Treat it as a tripwire for known-shaped leaks, not a classifier, and run `mem doctor --privacy` before promoting. The guard is also **tool-scoped**: it fires on `Write|Edit|MultiEdit` into the corpus, not on Bash/interpreter writes (`cp`/`mv`/`cat >>`/`python3 -c`) — the same interpreter-bypass class the destructive-guard and claim-audit gates document — so a promotion done by copying rather than re-writing lands unscanned; `mem doctor --privacy` (which now sweeps the `.ndjson` journal too, not just `*.md`) is the backstop.
 - fable-mem claims `~/.claude/memory/` because no native feature uses it: main-session auto-memory is per-repo (`~/.claude/projects/<p>/memory/`) and native "user scope" memory is **per-subagent islands** (`~/.claude/agent-memory/<name>/`), not a shared cross-project store. If a future Claude Code ships a real shared user-memory surface at that path, re-check for collision before upgrading.
+- **The Windows port is CI-verified, not yet session-verified.** `install.ps1`/`doctor.ps1` and the snippet parity are exercised end-to-end on `windows-latest` in CI, but no live Claude Code session pass has been run on native Windows — the hook payload contracts are OS-independent Claude Code contracts, so they *should* hold; run `doctor.ps1` plus the one-minute live checks above after installing and treat any drift as a bug to report. On native Windows the hooks also depend on Git Bash being installed (it is the hook command shell).
 - No prompt kit closes the gap on the longest-horizon work (multi-hour autonomous runs); route those to a stronger model when available.
-- Built for Claude Code 2.1.x in mid-2026; contracts (workflow API, hook events, frontmatter) may drift. The v1.1 components were verified live on `claude-opus-4-8` + Claude Code 2.1.198 on 2026-07-02; components added since (v1.2+ hooks, doctor, small-tier profile, /big-task) are covered by the unit suite and workflow checker but have not all had a live session pass — run `./tools/doctor.sh` and the one-minute live checks after installing.
+- Built for Claude Code 2.1.x in mid-2026; contracts (workflow API, hook events, frontmatter) may drift. The v1.1 components were verified live on `claude-opus-4-8` + Claude Code 2.1.198 on 2026-07-02; components added since (v1.2+ hooks, doctor, small-tier profile, /big-task, fable-mem, the Windows port) are covered by the unit suite and workflow checker but have not all had a live session pass — run the doctor script and the one-minute live checks after installing.
 
 ## Provenance & credits
 
