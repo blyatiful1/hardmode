@@ -21,7 +21,7 @@ to re-derive from scratch may already be banked from another repo. Search first.
 - Routine edits where no cross-project lesson could change the answer.
 
 ## Commands
-Run against the installed CLI (BASE-resolved — honors `CLAUDE_DIR`):
+Run against the installed CLI (BASE-resolved — honors `CLAUDE_DIR`). On Windows, invoke `python` wherever a command below says `python3`:
 - `python3 ~/.claude/cli/mem.py search "<keywords>"` — top hits (title + one-line description + path). Add `--json` for structured output, `--scope global` (or `project`) to isolate a scope.
 - `python3 ~/.claude/cli/mem.py show <id>` — read one memory's full body.
 - `python3 ~/.claude/cli/mem.py stats` — per-scope counts (sanity-check the corpus is indexed).

@@ -8,10 +8,16 @@ import re
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 SKILL = ROOT / "claude" / "skills" / "webdesign"
 INSTALL = ROOT / "install.sh"
 DOCTOR = ROOT / "tools" / "doctor.sh"
+
+# The POSIX installer path; Windows exercises the same behaviors against
+# install.ps1/doctor.ps1 in test_windows_port.py.
+requires_bash = pytest.mark.skipif(os.name == "nt", reason="POSIX installer path")
 
 
 def run(script, claude_dir, state_dir=None):
@@ -84,6 +90,7 @@ def test_doctrine_routes_design_work_to_the_skill():
     assert "webdesign" in doctrine, "doctrine must route website work to the skill"
 
 
+@requires_bash
 def test_install_copies_the_full_skill_dir(tmp_path):
     # Regression for the v1.7 installer change: skills used to install as bare
     # SKILL.md — references/ would silently not arrive.
@@ -101,6 +108,7 @@ def test_install_copies_the_full_skill_dir(tmp_path):
     assert not (claude / "fable-protocol-backups").exists(), "idempotent re-run must not churn backups"
 
 
+@requires_bash
 def test_install_preserves_user_extra_files_in_skill_dir(tmp_path):
     # A user's own notes inside an installed skill dir must survive re-install
     # and must not break idempotency detection for shipped files.
@@ -115,6 +123,7 @@ def test_install_preserves_user_extra_files_in_skill_dir(tmp_path):
     assert extra.read_text() == "mine\n"
 
 
+@requires_bash
 def test_install_prunes_formerly_shipped_skill_files(tmp_path):
     # A file an OLDER kit version shipped (tracked in .fable-manifest) but the
     # current version doesn't must be pruned on upgrade — a stale legal checklist
@@ -138,6 +147,7 @@ def test_install_prunes_formerly_shipped_skill_files(tmp_path):
     assert "old-checklist" not in manifest.read_text()
 
 
+@requires_bash
 def test_doctor_fails_on_missing_skill_reference(tmp_path):
     # Regression for the v1.7 doctor change: a skill missing its reference docs
     # used to pass (only SKILL.md was checked).

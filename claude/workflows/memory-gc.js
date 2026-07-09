@@ -17,7 +17,7 @@ const dryRun = /--dry-run\b/.test(raw)
 
 // Every agent resolves the memory base the same way the CLI and hooks do — never
 // hardcode ~/.claude, so a scratch CLAUDE_DIR is honored.
-const BASE_HINT = 'Resolve the memory base once: BASE = the value of the CLAUDE_DIR environment variable if it is set and non-empty, otherwise ~/.claude. Export CLAUDE_DIR into the environment of any mem.py call so the CLI reads the same base.'
+const BASE_HINT = 'Resolve the memory base once: BASE = the value of the CLAUDE_DIR environment variable if it is set and non-empty, otherwise ~/.claude. Export CLAUDE_DIR into the environment of any mem.py call so the CLI reads the same base. On Windows, invoke `python` wherever a command below says `python3` (Windows Pythons ship no python3 launcher).'
 
 const SCAN = {
   type: 'object',

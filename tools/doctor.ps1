@@ -1,0 +1,230 @@
+<#
+.SYNOPSIS
+fable-protocol doctor for Windows — verifies an installation is actually live, not silently inert.
+
+.DESCRIPTION
+Native-Windows port of tools/doctor.sh with the same checks and exit semantics.
+The kit's weakest link is the one manual step: merging the settings snippet. A
+botched merge leaves every hook unwired and the whole kit inert with zero
+symptoms — the exact failure the kit exists to prevent. This script makes the
+check deterministic. Run it after install.ps1 (and after Claude Code updates).
+
+Exit 0 = installation verified; exit 1 = at least one FAIL line above.
+#>
+[CmdletBinding()]
+param()
+
+Set-StrictMode -Version 2.0
+$ErrorActionPreference = 'Continue'
+
+$Src = Join-Path (Split-Path $PSScriptRoot -Parent) 'claude'
+$Dst = if ($env:CLAUDE_DIR) { $env:CLAUDE_DIR } else { Join-Path $HOME '.claude' }
+$script:fail = 0
+
+function Ok([string]$Msg)   { Write-Host "  ok:   $Msg" }
+function Bad([string]$Msg)  { Write-Host "  FAIL: $Msg"; $script:fail = 1 }
+function Warn([string]$Msg) { Write-Host "  warn: $Msg" }
+
+function Test-Identical([string]$A, [string]$B) {
+    if (-not (Test-Path $B -PathType Leaf)) { return $false }
+    return (Get-FileHash -Algorithm SHA256 $A).Hash -eq (Get-FileHash -Algorithm SHA256 $B).Hash
+}
+
+# Best python launcher on this machine: py -3, then python, then python3.
+# Returned as a command array (the leading comma stops PowerShell unrolling it).
+function Get-PythonCommand {
+    foreach ($spec in 'py -3', 'python', 'python3') {
+        $probe = @($spec -split ' ')
+        $exe = Get-Command $probe[0] -ErrorAction SilentlyContinue
+        if (-not $exe) { continue }
+        try {
+            $pargs = @($probe | Select-Object -Skip 1) + '--version'
+            & $probe[0] @pargs *> $null
+            if ($LASTEXITCODE -eq 0) { return , $probe }
+        } catch { }
+    }
+    return $null
+}
+
+function Invoke-Python($Py, [string[]]$PyArgs) {
+    $Py = @($Py)
+    $pargs = @($Py | Select-Object -Skip 1) + $PyArgs
+    & $Py[0] @pargs 2>$null
+}
+
+Write-Host "fable-protocol doctor — checking $Dst"
+
+# 1. Python — every hook runs through it. The Windows snippets invoke `python`.
+$py = Get-PythonCommand
+if ($py) {
+    $ver = (Invoke-Python $py @('--version') | Out-String).Trim()
+    Ok "python on PATH ($ver via '$($py -join ' ')')"
+    if ($py[0] -ne 'python') {
+        Warn "'python' itself is not the working launcher — the settings snippet invokes 'python'; adjust the hook commands to '$($py -join ' ')' when you merge"
+    }
+} else {
+    Bad "no working Python found (tried py -3, python, python3) — every hook is inert"
+}
+
+# 1b. Windows only: hook commands execute through Git Bash (Git for Windows).
+if ($env:OS -eq 'Windows_NT') {
+    if (Get-Command bash -ErrorAction SilentlyContinue) {
+        Ok "Git Bash on PATH (hook command shell)"
+    } else {
+        Bad "bash not on PATH — on Windows, hook commands run through Git Bash; install Git for Windows (https://gitforwindows.org) or every hook is inert"
+    }
+}
+
+# 2. Every component the repo ships is installed (and hooks compile).
+foreach ($f in Get-ChildItem (Join-Path $Src 'hooks') -Filter '*.py') {
+    $t = Join-Path (Join-Path $Dst 'hooks') $f.Name
+    if (-not (Test-Path $t -PathType Leaf)) {
+        Bad "hook missing: $t (re-run install.ps1)"
+    } elseif ($py) {
+        Invoke-Python $py @('-m', 'py_compile', $t) | Out-Null
+        if ($LASTEXITCODE -ne 0) {
+            Bad "hook does not compile: $t"
+        } elseif (-not (Test-Identical $f.FullName $t)) {
+            Warn "hook differs from this repo checkout: $t (older kit version?)"
+        } else {
+            Ok "hook: $($f.Name)"
+        }
+    } elseif (-not (Test-Identical $f.FullName $t)) {
+        Warn "hook differs from this repo checkout: $t (older kit version?)"
+    } else {
+        Ok "hook: $($f.Name)"
+    }
+}
+foreach ($f in Get-ChildItem (Join-Path $Src 'agents') -Filter '*.md') {
+    if (Test-Path (Join-Path (Join-Path $Dst 'agents') $f.Name) -PathType Leaf) { Ok "agent: $($f.Name)" }
+    else { Bad "agent missing: $(Join-Path (Join-Path $Dst 'agents') $f.Name)" }
+}
+foreach ($f in Get-ChildItem (Join-Path $Src 'workflows') -Filter '*.js') {
+    if (Test-Path (Join-Path (Join-Path $Dst 'workflows') $f.Name) -PathType Leaf) { Ok "workflow: /$($f.BaseName)" }
+    else { Bad "workflow missing: $(Join-Path (Join-Path $Dst 'workflows') $f.Name)" }
+}
+foreach ($d in Get-ChildItem (Join-Path $Src 'skills') -Directory) {
+    $complete = $true
+    $drifted = $false
+    $base = $d.FullName
+    foreach ($f in Get-ChildItem -Recurse -File -LiteralPath $base) {
+        $rel = $f.FullName.Substring($base.Length).TrimStart('\', '/')
+        $t = Join-Path (Join-Path (Join-Path $Dst 'skills') $d.Name) $rel
+        if (-not (Test-Path $t -PathType Leaf)) {
+            Bad "skill file missing: $t"; $complete = $false
+        } elseif (-not (Test-Identical $f.FullName $t)) {
+            Warn "skill file differs from this repo checkout: $t (older kit version?)"; $drifted = $true
+        }
+    }
+    if ($complete -and -not $drifted) { Ok "skill: $($d.Name)" }
+}
+
+# 2b. The mem CLI is a component KIND of its own — the four globs above don't see
+# claude/cli/, so it gets a hand-written check: present, compiles, and its own
+# self-diagnostic runs clean, reporting its FTS mode (fts5 / degraded-like).
+$mem = Join-Path (Join-Path $Dst 'cli') 'mem.py'
+if (-not (Test-Path $mem -PathType Leaf)) {
+    Bad "mem CLI missing: $mem (re-run install.ps1)"
+} elseif ($py) {
+    Invoke-Python $py @('-m', 'py_compile', $mem) | Out-Null
+    if ($LASTEXITCODE -ne 0) {
+        Bad "mem CLI does not compile: $mem"
+    } else {
+        $prevClaudeDir = $env:CLAUDE_DIR
+        $env:CLAUDE_DIR = $Dst
+        try {
+            $out = Invoke-Python $py @($mem, 'doctor') | Out-String
+            $rc = $LASTEXITCODE
+        } finally {
+            if ($null -eq $prevClaudeDir) { Remove-Item Env:CLAUDE_DIR -ErrorAction SilentlyContinue }
+            else { $env:CLAUDE_DIR = $prevClaudeDir }
+        }
+        $mode = 'unknown'
+        foreach ($line in ($out -split "`r?`n")) {
+            if ($line -match '^mode=(.+)$') { $mode = $Matches[1]; break }
+        }
+        if ($rc -eq 0) { Ok "mem CLI (mode=$mode)" }
+        else { Bad "mem CLI self-check failed: (with CLAUDE_DIR=$Dst) python $mem doctor" }
+    }
+}
+
+# Memory corpus dir writable + privacy pattern seed present.
+$memDir = Join-Path $Dst 'memory'
+try {
+    New-Item -ItemType Directory -Force -Path $memDir | Out-Null
+    $probe = Join-Path $memDir '.doctor-probe'
+    New-Item -ItemType File -Force -Path $probe | Out-Null
+    Remove-Item -Force $probe
+    Ok "memory dir writable: $memDir"
+} catch {
+    Bad "memory dir not writable: $memDir — recall + journal re-indexing will be inert"
+}
+if (Test-Path (Join-Path $memDir 'privacy.toml') -PathType Leaf) {
+    Ok "privacy.toml present"
+} else {
+    Warn "privacy.toml missing in $memDir — the privacy guard has no patterns to match (fails open)"
+}
+
+# 3. Doctrine is loadable.
+$doctrine = Join-Path $Dst 'CLAUDE.md'
+$doctrineText = if (Test-Path $doctrine -PathType Leaf) { [System.IO.File]::ReadAllText($doctrine) } else { '' }
+if ($doctrineText.Contains('Evidence before claims')) {
+    Ok "doctrine present in CLAUDE.md"
+    if ($doctrineText.Contains('Replace with 3-6 lines')) {
+        Warn "the '## This machine' section is still the placeholder — fill it in"
+    }
+} elseif (Test-Path (Join-Path $Dst 'CLAUDE.fable-protocol.md') -PathType Leaf) {
+    Bad "doctrine NOT merged: it sits unloaded in CLAUDE.fable-protocol.md next to your CLAUDE.md"
+} else {
+    Bad "doctrine missing: no Evidence-before-claims section in $doctrine"
+}
+
+# 4. The manual step: settings.json actually wires the hooks.
+$settingsPath = Join-Path $Dst 'settings.json'
+if (-not (Test-Path $settingsPath -PathType Leaf)) {
+    Bad "settings.json missing — no hooks are wired, the enforcement layer is OFF"
+} else {
+    $settingsText = [System.IO.File]::ReadAllText($settingsPath)
+    $settings = $null
+    try { $settings = $settingsText | ConvertFrom-Json } catch { }
+    if ($null -eq $settings) {
+        Bad "settings.json is not valid JSON — Claude Code will ignore it"
+    } else {
+        Ok "settings.json parses"
+        foreach ($f in Get-ChildItem (Join-Path $Src 'hooks') -Filter '*.py') {
+            if ($settingsText.Contains($f.Name)) { Ok "wired: $($f.Name)" }
+            else { Bad "NOT wired in settings.json: $($f.Name) (merge the snippet from install.ps1)" }
+        }
+        $effort = $null
+        try { $effort = $settings.effortLevel } catch { }
+        if ($effort -eq 'xhigh') {
+            Ok "effortLevel: xhigh (the single biggest lever)"
+        } else {
+            Warn "effortLevel is not 'xhigh' in settings.json — on Opus 4.8 this is THE lever"
+        }
+        if ($settingsText.Contains('python3 ')) {
+            Warn "settings.json invokes 'python3' — Windows Pythons ship no 'python3'; use the Windows snippet (python) or those hooks are inert"
+        }
+    }
+}
+
+# 5. Hook state dir is writable (loop alarm, weakening alarm, compaction save).
+$state = if ($env:FABLE_STATE_DIR) { $env:FABLE_STATE_DIR } else { Join-Path (Join-Path $Dst 'tmp') 'fable-protocol' }
+try {
+    New-Item -ItemType Directory -Force -Path $state | Out-Null
+    $probe = Join-Path $state '.doctor-probe'
+    New-Item -ItemType File -Force -Path $probe | Out-Null
+    Remove-Item -Force $probe
+    Ok "state dir writable: $state"
+} catch {
+    Bad "state dir not writable: $state — stateful hooks (loop alarm, compaction save) will be inert"
+}
+
+Write-Host ""
+if ($script:fail -ne 0) {
+    Write-Host "DOCTOR: FAILED — fix the FAIL lines above, then re-run."
+    exit 1
+}
+Write-Host "DOCTOR: installation verified. Final live check (needs a real session):"
+Write-Host "  ask a fresh session to 'quote the first bullet of your Evidence before claims doctrine'."
+exit 0
