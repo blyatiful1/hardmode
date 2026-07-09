@@ -19,7 +19,7 @@ jobs:
           foreach ($f in 'install.ps1', 'tools/doctor.ps1') {
             $tokens = $null; $errors = $null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $f), [ref]$tokens, [ref]$errors) | Out-Null
-            if ($errors) { $bad += "$f:"; $bad += $errors }
+            if ($errors) { $bad += "${f}:"; $bad += $errors }
           }
           if ($bad) { $bad | Write-Host; exit 1 }
           Write-Host 'powershell scripts parse'
@@ -94,8 +94,10 @@ jobs:
         shell: pwsh
         run: |
           $env:CLAUDE_DIR = Join-Path $env:RUNNER_TEMP 'fake-claude'
-          ./install.ps1 | Out-Null
-          $second = ./install.ps1 | Out-String
+          ./install.ps1 *>&1 | Out-Null
+          # install.ps1 reports via Write-Host (information stream) — merge all
+          # streams or the capture is empty and this check can never pass.
+          $second = ./install.ps1 *>&1 | Out-String
           if ($second -notmatch 'unchanged') { Write-Host 'second run not idempotent'; exit 1 }
           foreach ($rel in 'skills/fable/SKILL.md', 'skills/webdesign/references/german-market.md', 'cli/mem.py') {
             if (-not (Test-Path (Join-Path $env:CLAUDE_DIR $rel))) { Write-Host "missing: $rel"; exit 1 }
