@@ -1,11 +1,19 @@
 """Small-driver tier: snippet sync, installer flags, model pinning. Self-contained."""
 import json
+import os
 import pathlib
 import subprocess
+
+import pytest
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 BASE = json.loads((REPO / "claude/settings/settings-snippet.json").read_text())
 SMALL = json.loads((REPO / "claude/settings/settings-snippet-small.json").read_text())
+
+# The POSIX installer path: on Windows, bare `bash` is the WSL stub (which even
+# fails with a nonzero exit — a false green for the unknown-flag test). Windows
+# exercises the same flags against install.ps1 in test_windows_port.py.
+requires_bash = pytest.mark.skipif(os.name == "nt", reason="POSIX installer path")
 
 
 def test_small_snippet_is_base_plus_loop_threshold():
@@ -28,12 +36,14 @@ def run_install(tmp_path, *flags):
     return dst, r.stdout
 
 
+@requires_bash
 def test_default_install_does_not_pin_models(tmp_path):
     dst, _ = run_install(tmp_path)
     for agent in (dst / "agents").glob("*.md"):
         assert "\nmodel:" not in agent.read_text(), f"{agent.name} unexpectedly pinned"
 
 
+@requires_bash
 def test_strong_model_flag_pins_all_agent_frontmatter(tmp_path):
     dst, _ = run_install(tmp_path, "--strong-model", "opus")
     agents = list((dst / "agents").glob("*.md"))
@@ -44,6 +54,7 @@ def test_strong_model_flag_pins_all_agent_frontmatter(tmp_path):
         assert "\nmodel: opus\n" in fm, f"{agent.name} frontmatter not pinned: {fm!r}"
 
 
+@requires_bash
 def test_pinned_install_is_idempotent(tmp_path):
     dst, _ = run_install(tmp_path, "--strong-model", "opus")
     before = {p.name: p.read_text() for p in (dst / "agents").glob("*.md")}
@@ -56,12 +67,14 @@ def test_pinned_install_is_idempotent(tmp_path):
     assert not backups.exists() or not any(backups.iterdir()), "idempotent re-run made backups"
 
 
+@requires_bash
 def test_tier_small_prints_small_snippet(tmp_path):
     _, out = run_install(tmp_path, "--tier", "small")
     assert "FABLE_LOOP_THRESHOLD" in out, "--tier small must print the small snippet"
     assert "big-task" in out, "small-tier guidance should point at /big-task"
 
 
+@requires_bash
 def test_unknown_flag_fails_loudly(tmp_path):
     r = subprocess.run(
         ["bash", str(REPO / "install.sh"), "--bogus"],

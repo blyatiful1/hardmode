@@ -62,7 +62,8 @@ def test_skill_points_at_its_references():
 def test_german_market_carries_the_laws():
     # The compliance gate is only as good as the laws it names. These are the
     # load-bearing ones as of mid-2026 (verified against live sources in v1.7).
-    text = (SKILL / "references" / "german-market.md").read_text()
+    # encoding pinned: Windows' locale default (cp1252) would mojibake the umlaut
+    text = (SKILL / "references" / "german-market.md").read_text(encoding="utf-8")
     for token in ("DDG", "DSGVO", "TDDDG", "BFSG", "Impressum",
                   "Datenschutzerklärung", "prefers-reduced-motion"):
         assert token in text, f"german-market.md must carry '{token}'"

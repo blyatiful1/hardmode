@@ -143,6 +143,29 @@ def test_install_ps1_prunes_formerly_shipped_skill_files(tmp_path):
 
 
 @requires_pwsh
+def test_install_ps1_tier_small_prints_small_snippet(tmp_path):
+    claude = tmp_path / "claude"
+    r = run_ps(INSTALL_PS, claude, "-Tier", "small")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "FABLE_LOOP_THRESHOLD" in r.stdout, "-Tier small must print the small snippet"
+    assert "big-task" in r.stdout, "small-tier guidance should point at /big-task"
+
+
+@requires_pwsh
+def test_install_ps1_unknown_flag_fails_loudly(tmp_path):
+    r = run_ps(INSTALL_PS, tmp_path / "claude", "-Bogus")
+    assert r.returncode != 0
+
+
+@requires_pwsh
+def test_install_ps1_default_does_not_pin_models(tmp_path):
+    claude = tmp_path / "claude"
+    assert run_ps(INSTALL_PS, claude).returncode == 0
+    for agent in (claude / "agents").glob("*.md"):
+        assert "\nmodel:" not in agent.read_text(), f"{agent.name} unexpectedly pinned"
+
+
+@requires_pwsh
 def test_install_ps1_strong_model_pins_verification_agents(tmp_path):
     claude = tmp_path / "claude"
     r = run_ps(INSTALL_PS, claude, "-StrongModel", "opus")
