@@ -41,6 +41,41 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/pretool-mem-privacy-guard.py",
+            "timeout": 10,
+            "statusMessage": "Privacy guard: scanning for work-markers before a global-corpus write..."
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/userpromptsubmit-mem-recall.py",
+            "timeout": 5,
+            "statusMessage": "Recalling cross-project memory..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 ~/.claude/hooks/sessionend-mem-journal.py",
+            "timeout": 10,
+            "statusMessage": "Journaling session + incremental memory re-index..."
+          }
+        ]
       }
     ],
     "PostToolUse": [

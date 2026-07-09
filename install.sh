@@ -108,6 +108,40 @@ for f in "$SRC"/hooks/*.py; do
   backup "$t" "hooks/$(basename "$f")"; cp "$f" "$t"; chmod +x "$t"; echo "  hook:     $(basename "$f")"
 done
 
+# mem CLI + memory corpus — a NEW component KIND (not an agent/workflow/skill/hook), so
+# it needs its own copy block. mem.py is a single file → flat identical() idempotency +
+# chmod +x, same as a hook. privacy.toml is the USER'S pattern file: seed it only when
+# absent, NEVER overwrite work-markers the user has tuned (unlike the code, it is data
+# the user owns). Both go OUTSIDE the backup tree per the same rule as everything else.
+mkdir -p "$DST/cli" "$DST/memory"
+t="$DST/cli/mem.py"
+if identical "$SRC/cli/mem.py" "$t"; then
+  echo "  cli:      mem.py (unchanged)"
+else
+  backup "$t" "cli/mem.py"; cp "$SRC/cli/mem.py" "$t"; chmod +x "$t"; echo "  cli:      mem.py"
+fi
+if [ -e "$DST/memory/privacy.toml" ]; then
+  echo "  memory:   privacy.toml (kept — your patterns are never overwritten)"
+else
+  cp "$SRC/memory/privacy.toml" "$DST/memory/privacy.toml"
+  echo "  memory:   privacy.toml (seeded — edit it to add your own work-markers)"
+fi
+
+# Bootstrap the memory index ONCE, now — so the first SessionEnd journal hook never has
+# to carry a cold full build inside its 10s budget (a killed cold build rolls back to
+# empty and recall silently never works). Runs under CLAUDE_DIR="$DST" so it indexes the
+# install target, not the runner's $HOME. Soft-fail: a missing python3 must not abort.
+if command -v python3 >/dev/null 2>&1; then
+  if CLAUDE_DIR="$DST" python3 "$DST/cli/mem.py" index --rebuild >/dev/null 2>&1; then
+    echo "  index:    memory corpus indexed (mem index --rebuild)"
+  else
+    echo "  WARNING: initial 'mem index --rebuild' failed — recall warms up on first SessionEnd."
+  fi
+else
+  echo "  NOTE: 'python3' not found — skipped initial memory index; run"
+  echo "        'CLAUDE_DIR=\"$DST\" python3 \"$DST/cli/mem.py\" index --rebuild' once python3 is installed."
+fi
+
 # CLAUDE.md: never clobber an existing doctrine
 if [ -e "$DST/CLAUDE.md" ]; then
   if identical "$SRC/CLAUDE.md" "$DST/CLAUDE.md"; then
@@ -163,6 +197,11 @@ else
   echo "  PostToolUse  loop alarm (3rd identical failing command -> stop and reassess)"
 fi
 echo "  PostToolUse  test-weakening alarm (skip/disable marker added to a test file)"
+echo "  UserPromptSubmit  cross-project memory recall (read-only mem CLI FTS query)"
+echo "  SessionEnd   session journal breadcrumb + incremental memory re-index"
+echo "  PreToolUse   memory privacy guard (blocks work-markers leaking into the global corpus)"
+echo "The mem CLI (cross-project memory, layered on native auto-memory):"
+echo "  python3 ~/.claude/cli/mem.py search|show|stats|doctor|gc-scan  (corpus: ~/.claude/memory/)"
 echo "CLAUDE_CODE_MAX_OUTPUT_TOKENS is best-effort (harmless; clamped per model)."
 echo
 echo "After merging, verify the install deterministically:"
