@@ -162,8 +162,27 @@ def test_override_is_scoped_to_its_own_segment(tmp_path):
         "FABLE_DESTRUCTIVE_OK=1 git reset --hard; rm -rf /", cwd=repo).returncode == 2
     assert run_hook(
         "FABLE_DESTRUCTIVE_OK=1 git reset --hard && git clean -fd", cwd=repo).returncode == 2
+    # A bare NEWLINE is a command separator too — the override must not leak across it.
+    assert run_hook(
+        "FABLE_DESTRUCTIVE_OK=1 git reset --hard\nrm -rf /", cwd=repo).returncode == 2
     # ...but the approved segment alone still passes.
     assert run_hook("FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+
+
+def test_command_substitution_in_double_quotes_is_inspected(tmp_path):
+    # A destructive command hidden in "$(...)" or `...` still executes — the guard must
+    # see through the surrounding double quotes.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook('echo "$(git reset --hard)"', cwd=repo).returncode == 2
+    assert run_hook("echo `git clean -fd`", cwd=repo).returncode == 2
+
+
+def test_rm_phrase_in_commit_message_does_not_false_trip(tmp_path):
+    # A commit message that merely MENTIONS `rm -rf /` is not an rm command; only a
+    # genuine (even quoted) target should block.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook('git commit -m "note: never run rm -rf / here"', cwd=repo).returncode == 0
+    assert run_hook('rm -rf "/"', cwd=repo).returncode == 2
 
 
 def test_non_git_cwd_fails_open(tmp_path):
