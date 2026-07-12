@@ -702,7 +702,12 @@ def gc_scan(base=None):
     # A memory with no frontmatter `name:` falls back to its filename basename
     # (parse_file), so every native per-project MEMORY.md shares the name "MEMORY".
     # Matching on a filename-fallback name produced N-choose-2 bogus "identical name"
-    # pairs across unrelated projects (CONF50) — so only compare DECLARED names.
+    # pairs across unrelated projects (CONF50) — so only compare names that differ from
+    # the filename slug. Tradeoff: an EXPLICIT `name: Auth` in auth.md reads as a fallback
+    # and won't be flagged as an identical-name dup — but such a pair still surfaces via
+    # same_topic_pairs (shared keywords), and gc-scan only PROPOSES, so under-proposing an
+    # exact-name match is a safe degradation. Distinguishing declared-vs-fallback origin
+    # would need a schema column + index migration, not worth it for an advisory tool.
     def declared_name(m):
         n = _norm(m["name"])
         return n if n and n != _norm(slug_of(m["path"])) else ""

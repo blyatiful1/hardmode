@@ -24,7 +24,7 @@ to re-derive from scratch may already be banked from another repo. Search first.
 The CLI lives at `$CLAUDE_DIR/cli/mem.py` (default `~/.claude/cli/mem.py`) and resolves
 the corpus from `CLAUDE_DIR` — so under a custom `CLAUDE_DIR`, use that path, not the
 `~/.claude` literal shown here. On Windows, invoke `python` wherever a command says `python3`:
-- `python3 "${CLAUDE_DIR:-~/.claude}/cli/mem.py" search "<keywords>"` — top hits (title + one-line description + path). Add `--json` for structured output, `--scope global` (or `project`) to isolate a scope.
+- `python3 "${CLAUDE_DIR:-$HOME/.claude}/cli/mem.py" search "<keywords>"` — top hits (title + one-line description + path). Add `--json` for structured output, `--scope global` (or `project`) to isolate a scope.
 - `... mem.py show <id>` — read one memory's full body.
 - `... mem.py stats` — per-scope counts (sanity-check the corpus is indexed).
 - `... mem.py doctor` — FTS mode + corpus health if search behaves oddly.
@@ -34,4 +34,7 @@ The UserPromptSubmit recall hook already surfaces the top few cross-project hits
 ## Banking and promotion
 To bank a lesson or promote one project→global, use the **postmortem** skill — it is the
 single source of truth for the write mechanics and the privacy-guard boundary. Search here
-first (step above) to confirm the lesson isn't already banked before you promote.
+first (step above) to confirm the lesson isn't already banked before you promote. And run
+`mem doctor --privacy` as an explicit backstop before promoting/sharing: the write-time
+guard only covers `Write|Edit` and fails open, so an interpreter- or copy-based promotion
+(`cat >>`, `python3 -c`, `cp`) lands unscanned until the corpus sweep catches it.

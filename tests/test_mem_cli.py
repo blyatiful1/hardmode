@@ -208,8 +208,9 @@ def test_doctor_privacy_warns_the_index_embeds_project_bodies(tmp_path):
     # CONF49: mem-index.db in the shareable memory dir stores project-memory bodies
     # verbatim; the privacy scan must warn about it rather than imply the dir is safe.
     write_memory(project_dir(tmp_path, "repoA"), "note.md", "Note", "some project detail")
-    run(tmp_path, "index")  # creates mem-index.db under memory/
+    assert run(tmp_path, "index").returncode == 0  # creates mem-index.db under memory/
     r = run(tmp_path, "doctor", "--privacy")
+    assert r.returncode == 0, r.stderr
     assert "embeds project-memory bodies" in r.stdout
 
 

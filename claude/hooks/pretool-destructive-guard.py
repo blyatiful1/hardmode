@@ -27,11 +27,24 @@ import subprocess
 import sys
 
 OVERRIDE = "FABLE_DESTRUCTIVE_OK=1"
-# The override only counts as an actual env-assignment prefix on a command segment —
-# NOT merely mentioned anywhere (a commit message or echo that contains the string
-# must not disable the guard for the whole line). Matched against the quote-stripped
-# view so quoted text can never supply it.
-OVERRIDE_PREFIX = re.compile(r"(?:^|[;&|]\s*)FABLE_DESTRUCTIVE_OK=1(?:\s|$)")
+# The override only counts as an actual env-assignment prefix at the START of a shell
+# segment (after any other leading VAR=val assignments) — NOT merely mentioned anywhere
+# (a commit message or echo that contains the string must not disable the guard). It is
+# matched per segment against the quote-stripped view, so it exempts only the command it
+# prefixes, never later segments after a ; | && separator.
+OVERRIDE_SEGMENT = re.compile(r"^\s*(?:[A-Za-z_]\w*=\S*\s+)*FABLE_DESTRUCTIVE_OK=1(?:\s|$)")
+
+
+def _segments(s):
+    """Yield (start, end) spans of s split on top-level shell separators ; | &.
+    Operates on the length-preserving quote-stripped view, so separators that were
+    inside quotes are already spaces and cannot cut a segment."""
+    spans, start = [], 0
+    for m in re.finditer(r"[;|&]+", s):
+        spans.append((start, m.start()))
+        start = m.end()
+    spans.append((start, len(s)))
+    return spans
 
 # (pattern, why) — matched per shell segment context via a whole-command regex;
 # [^|;&]* keeps a match from spanning into the next piped/chained command.
@@ -93,38 +106,42 @@ def main():
     if not isinstance(cmd, str) or not cmd.strip():
         return 0
     flat = re.sub(r"\s+", " ", cmd)
-    # Git patterns match on a quote-stripped view so a commit message or echo
-    # that merely MENTIONS "reset --hard" never trips the guard. The rm pattern
-    # matches the raw command — its targets are often quoted.
-    unquoted = re.sub(r"'[^']*'|\"[^\"]*\"", " ", flat)
-    if OVERRIDE_PREFIX.search(unquoted):
-        return 0
+    # Length-PRESERVING quote strip (each quoted span -> same-length spaces) so a commit
+    # message or echo that merely MENTIONS "reset --hard" never trips the git patterns,
+    # while offsets in `unquoted` still line up 1:1 with `flat` — the rm pattern needs the
+    # raw (quoted) targets, so it is checked against the matching slice of `flat`.
+    unquoted = re.sub(r"'[^']*'|\"[^\"]*\"", lambda m: " " * len(m.group()), flat)
 
-    for pat, why in ALWAYS_DANGEROUS:
-        haystack = flat if why.startswith("recursive rm") else unquoted
-        if pat.search(haystack):
-            return block(why)
-    # Force-push must be judged PER SEGMENT: `--force-with-lease` anywhere else on
-    # the line (a chained safe push, an echo) must not excuse a bare --force in a
-    # different segment. Split on shell separators and check each segment alone.
-    for segment in re.split(r"[|;&]+", unquoted):
-        if FORCE_PUSH.search(segment) and not FORCE_WITH_LEASE.search(segment):
+    # Evaluate EVERY check per shell segment. The override is a shell env-assignment
+    # prefix: it applies ONLY to the command it prefixes, so it must exempt only its own
+    # segment — `FABLE_DESTRUCTIVE_OK=1 git reset --hard; rm -rf /` still blocks the rm.
+    # Splitting the length-aligned `unquoted` also keeps a separator inside a quote (now
+    # spaces) from wrongly cutting a segment.
+    tree_reason = None
+    for seg in _segments(unquoted):
+        useg = unquoted[seg[0]:seg[1]]
+        rseg = flat[seg[0]:seg[1]]
+        if OVERRIDE_SEGMENT.search(useg):
+            continue  # user explicitly approved THIS command; leave the rest guarded
+        for pat, why in ALWAYS_DANGEROUS:
+            if pat.search(rseg if why.startswith("recursive rm") else useg):
+                return block(why)
+        if FORCE_PUSH.search(useg) and not FORCE_WITH_LEASE.search(useg):
             return block("bare force-push can destroy remote history; use --force-with-lease, "
                          "and only with user approval")
-
-    tree_reason = None
-    for pat, why in TREE_DESTROYERS:
-        if pat.search(unquoted):
-            tree_reason = why
-            break
-    if tree_reason is None:
-        m = RESTORE.search(unquoted)
-        if m:
-            args = m.group(1)
-            # `git restore --staged <path>` only unstages — safe. Anything that
-            # touches the worktree discards local edits.
-            if "--staged" not in args or "--worktree" in args or re.search(r"\s-W\b", args):
-                tree_reason = "git restore discards uncommitted modifications to the given paths"
+        if tree_reason is None:
+            for pat, why in TREE_DESTROYERS:
+                if pat.search(useg):
+                    tree_reason = why
+                    break
+        if tree_reason is None:
+            m = RESTORE.search(useg)
+            if m:
+                args = m.group(1)
+                # `git restore --staged <path>` only unstages — safe. Anything that
+                # touches the worktree discards local edits.
+                if "--staged" not in args or "--worktree" in args or re.search(r"\s-W\b", args):
+                    tree_reason = "git restore discards uncommitted modifications to the given paths"
     if tree_reason:
         n = dirty_paths(data.get("cwd"))
         if n:

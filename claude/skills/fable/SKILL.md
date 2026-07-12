@@ -42,8 +42,9 @@ stages because you feel confident — feeling confident is not evidence.
 
 ## Workflow stages honor the orchestration gate
 The /deep-plan and /paranoid-review stages use the Workflow tool, which is the user's
-money — so they run ONLY when the session is opted in (the user typed "ultracode",
-invoked /fable or another slash command, or asked for orchestration in their own words).
+money — so they run ONLY when the session is opted in (the user typed "ultracode", the
+user invoked /fable or another slash command that explicitly instructs Workflow/
+orchestration use, or the user asked for orchestration in their own words).
 When this skill fired on its own auto-trigger, or the Workflow tool is otherwise
 unavailable, do the SAME stage with Agent-tool subagents (3 refuters / plan critic /
 per-dimension reviewers spawned directly) — degrade the machinery, never the rigor.

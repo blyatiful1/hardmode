@@ -19,8 +19,11 @@ def load(path, name):
 
 
 def score_instance(instance):
+    # score.py runs two nested pytest invocations, each with its own 300s cap, so the
+    # outer wait needs headroom for both (plus slack) — otherwise this harness's timeout
+    # would fire first and mask the graceful-degradation path it exists to exercise.
     r = subprocess.run([sys.executable, str(SCORE), str(instance)],
-                       capture_output=True, text=True, timeout=300)
+                       capture_output=True, text=True, timeout=650)
     assert r.returncode == 0, r.stderr
     return json.loads(r.stdout)
 

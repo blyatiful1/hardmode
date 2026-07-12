@@ -154,6 +154,18 @@ def test_override_only_as_assignment_not_mere_mention(tmp_path):
         cwd=repo).returncode == 2
 
 
+def test_override_is_scoped_to_its_own_segment(tmp_path):
+    # The override is a shell env-assignment prefix — it approves only the command it
+    # prefixes. A later, UNAPPROVED destructive segment must still be blocked.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook(
+        "FABLE_DESTRUCTIVE_OK=1 git reset --hard; rm -rf /", cwd=repo).returncode == 2
+    assert run_hook(
+        "FABLE_DESTRUCTIVE_OK=1 git reset --hard && git clean -fd", cwd=repo).returncode == 2
+    # ...but the approved segment alone still passes.
+    assert run_hook("FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+
+
 def test_non_git_cwd_fails_open(tmp_path):
     assert run_hook("git reset --hard", cwd=tmp_path).returncode == 0
 
