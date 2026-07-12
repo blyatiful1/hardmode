@@ -79,7 +79,9 @@ def db_path(base):
 
 
 def state_dir():
-    d = os.environ.get("FABLE_STATE_DIR") or os.path.expanduser("~/.claude/tmp/fable-protocol")
+    d = os.environ.get("FABLE_STATE_DIR") or os.path.join(
+        os.environ.get("CLAUDE_DIR") or os.path.expanduser("~/.claude"),
+        "tmp", "fable-protocol")
     os.makedirs(d, exist_ok=True)
     return d
 

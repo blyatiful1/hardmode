@@ -49,17 +49,19 @@ DB_NAME = "mem-index.db"
 PRIVACY_TOML = "privacy.toml"
 STALE_DAYS = 90                 # project memories older than this are gc-scan candidates
 DEFAULT_LIMIT = 10
-FTS_COLUMNS = ("name", "description", "body")
 
 # Relative-date offenders — "yesterday" is meaningless next session (postmortem hygiene).
+# Deliberately does NOT include a bare "now" or "recently": both appear constantly in
+# ordinary prose ("we now use tabs"), and gc dispatched a rewrite agent for every one —
+# a high-frequency false positive (CONF53). Only unambiguous time-anchors are flagged.
 REL_DATE = re.compile(
-    r"\b(?:yesterday|today|tomorrow|tonight|now|"
+    r"\b(?:yesterday|today|tomorrow|tonight|"
     r"last\s+(?:night|week|month|year|time)|"
     r"next\s+(?:week|month|year|time)|"
     r"this\s+(?:morning|afternoon|evening|week|month|year)|"
     r"a\s+(?:few\s+)?(?:day|week|month|year)s?\s+ago|"
     r"\d+\s+(?:day|week|month|year)s?\s+ago|"
-    r"just\s+now|recently|earlier\s+today)\b",
+    r"just\s+now|earlier\s+today)\b",
     re.IGNORECASE,
 )
 
@@ -225,16 +227,27 @@ def open_db(base=None, readonly=False, recreate_on_corrupt=False):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     if readonly and os.path.exists(path):
         conn = sqlite3.connect("file:%s?mode=ro" % path, uri=True, timeout=5)
-        if os.environ.get("FABLE_MEM_FORCE_DEGRADED") == "1":
+        forced_degraded = os.environ.get("FABLE_MEM_FORCE_DEGRADED") == "1"
+        # A schema-LESS but otherwise valid sqlite file (0-byte from touch/disk-full,
+        # or a sync tool clobbering it) has no `memories` table. Search/show query it
+        # directly, so probe it here and treat its absence as a corrupt/disposable
+        # index rather than letting the caller traceback later (CONF48). Do this even
+        # under FABLE_MEM_FORCE_DEGRADED, whose path also reads `memories`.
+        try:
+            conn.execute("SELECT 1 FROM memories LIMIT 1")
+        except sqlite3.OperationalError:   # no such table: memories
+            conn.close()
+            raise CorruptIndex(path)
+        except sqlite3.DatabaseError:      # file is not a database => corrupt
+            conn.close()
+            raise CorruptIndex(path)
+        if forced_degraded:
             return conn, "degraded-like"
         mode = "fts5"
         try:
             conn.execute("SELECT 1 FROM mem_fts LIMIT 1")
-        except sqlite3.OperationalError:   # subclass of DatabaseError — list first
+        except sqlite3.OperationalError:   # fts table absent => degraded search
             mode = "degraded-like"
-        except sqlite3.DatabaseError:      # file is not a database => corrupt
-            conn.close()
-            raise CorruptIndex(path)
         return conn, mode
     conn = sqlite3.connect(path, timeout=10)
     try:
@@ -377,7 +390,10 @@ def keywords(text):
 
 
 def _fts_match(query):
-    toks = WORD.findall(query)
+    # Use the SAME token filter as the degraded path (keywords(): len>2, stopwords
+    # dropped) so fts5 and LIKE modes agree on which tokens count — otherwise the same
+    # query could hit in one mode and return nothing in the other (CONF57).
+    toks = keywords(query)
     if not toks:
         return None
     return " OR ".join('"%s"' % t for t in toks)
@@ -591,6 +607,20 @@ def privacy_scan(base=None):
     return 0, ["privacy: clean — no work markers in the global corpus"]
 
 
+def index_privacy_advisory(base=None):
+    """A one-line warning (or []) that the sqlite index embeds project-memory bodies.
+    The index sits in the shareable memory dir and stores every project memory's BODY
+    verbatim — exactly the work-marker content the privacy boundary keeps out of that
+    dir — but the pattern scan can't read binary sqlite, so this warns explicitly rather
+    than let `doctor --privacy` imply the whole dir is safe to share (CONF49)."""
+    db = db_path(base)
+    if not os.path.exists(db):
+        return []
+    return ["privacy: NOTE %s embeds project-memory bodies verbatim; it is a local cache — "
+            "do NOT share/back-up this dir publicly, or delete the index (mem.py rebuilds "
+            "it) before you do" % db]
+
+
 def cmd_doctor(args):
     # Must create the DB and exit 0 on a fresh, empty corpus.
     mdir = memory_dir()
@@ -610,7 +640,7 @@ def cmd_doctor(args):
               % ("present" if os.path.exists(privacy_path()) else "absent"))
         if args.privacy:
             code, lines = privacy_scan()   # scans corpus FILES, not the db — still valid
-            for ln in lines:
+            for ln in lines + index_privacy_advisory():
                 print(ln)
             return code or 1
         return 1
@@ -623,7 +653,7 @@ def cmd_doctor(args):
     print("privacy_toml=%s" % ("present" if os.path.exists(ppath) else "absent"))
     if args.privacy:
         code, lines = privacy_scan()
-        for ln in lines:
+        for ln in lines + index_privacy_advisory():
             print(ln)
         return code
     return 0
@@ -669,10 +699,17 @@ def gc_scan(base=None):
     near_dupes, stale, relative_dates, same_topic = [], [], [], []
 
     # 1) near-duplicate name/description (normalized equality).
+    # A memory with no frontmatter `name:` falls back to its filename basename
+    # (parse_file), so every native per-project MEMORY.md shares the name "MEMORY".
+    # Matching on a filename-fallback name produced N-choose-2 bogus "identical name"
+    # pairs across unrelated projects (CONF50) — so only compare DECLARED names.
+    def declared_name(m):
+        n = _norm(m["name"])
+        return n if n and n != _norm(slug_of(m["path"])) else ""
     for i in range(len(mems)):
         for j in range(i + 1, len(mems)):
             a, b = mems[i], mems[j]
-            if _norm(a["name"]) and _norm(a["name"]) == _norm(b["name"]):
+            if declared_name(a) and declared_name(a) == declared_name(b):
                 near_dupes.append({"a": a["path"], "b": b["path"], "reason": "identical name"})
             elif _norm(a["description"]) and _norm(a["description"]) == _norm(b["description"]):
                 near_dupes.append({"a": a["path"], "b": b["path"],

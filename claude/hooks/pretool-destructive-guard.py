@@ -27,14 +27,19 @@ import subprocess
 import sys
 
 OVERRIDE = "FABLE_DESTRUCTIVE_OK=1"
+# The override only counts as an actual env-assignment prefix on a command segment —
+# NOT merely mentioned anywhere (a commit message or echo that contains the string
+# must not disable the guard for the whole line). Matched against the quote-stripped
+# view so quoted text can never supply it.
+OVERRIDE_PREFIX = re.compile(r"(?:^|[;&|]\s*)FABLE_DESTRUCTIVE_OK=1(?:\s|$)")
 
 # (pattern, why) — matched per shell segment context via a whole-command regex;
 # [^|;&]* keeps a match from spanning into the next piped/chained command.
 TREE_DESTROYERS = [
     (re.compile(r"\bgit\b[^|;&]*\breset\b[^|;&]*--hard"),
      "git reset --hard discards ALL uncommitted changes"),
-    (re.compile(r"\bgit\b[^|;&]*\bcheckout\b[^|;&]*(?:\s--(?:\s|$)|\s-f\b|\s\.(?:\s|$|;))"),
-     "git checkout with --/-f/. overwrites uncommitted local modifications"),
+    (re.compile(r"\bgit\b[^|;&]*\bcheckout\b[^|;&]*(?:\s--(?:\s|$)|\s-f\b|\s\.\.?/?(?:\s|$|;))"),
+     "git checkout with --/-f/./.. overwrites uncommitted local modifications"),
     (re.compile(r"\bgit\b[^|;&]*\bclean\b[^|;&]*\s-[a-zA-Z]*f"),
      "git clean -f permanently deletes untracked files"),
     (re.compile(r"\bgit\b[^|;&]*\bswitch\b[^|;&]*(?:\s-f\b|\s--force\b|\s--discard-changes\b)"),
@@ -88,20 +93,24 @@ def main():
     if not isinstance(cmd, str) or not cmd.strip():
         return 0
     flat = re.sub(r"\s+", " ", cmd)
-    if OVERRIDE in flat:
-        return 0
     # Git patterns match on a quote-stripped view so a commit message or echo
     # that merely MENTIONS "reset --hard" never trips the guard. The rm pattern
     # matches the raw command — its targets are often quoted.
     unquoted = re.sub(r"'[^']*'|\"[^\"]*\"", " ", flat)
+    if OVERRIDE_PREFIX.search(unquoted):
+        return 0
 
     for pat, why in ALWAYS_DANGEROUS:
         haystack = flat if why.startswith("recursive rm") else unquoted
         if pat.search(haystack):
             return block(why)
-    if FORCE_PUSH.search(unquoted) and not FORCE_WITH_LEASE.search(unquoted):
-        return block("bare force-push can destroy remote history; use --force-with-lease, "
-                     "and only with user approval")
+    # Force-push must be judged PER SEGMENT: `--force-with-lease` anywhere else on
+    # the line (a chained safe push, an echo) must not excuse a bare --force in a
+    # different segment. Split on shell separators and check each segment alone.
+    for segment in re.split(r"[|;&]+", unquoted):
+        if FORCE_PUSH.search(segment) and not FORCE_WITH_LEASE.search(segment):
+            return block("bare force-push can destroy remote history; use --force-with-lease, "
+                         "and only with user approval")
 
     tree_reason = None
     for pat, why in TREE_DESTROYERS:

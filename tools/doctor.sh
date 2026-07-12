@@ -18,10 +18,26 @@ warn() { echo "  warn: $1"; }
 
 echo "fable-protocol doctor — checking $DST"
 
-# 1. python3 — every hook runs through it.
+# 0. Claude Code version — saved workflows (/paranoid-review etc.) need >= 2.1.154.
+if command -v claude >/dev/null 2>&1; then
+  ver="$(claude --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
+  if [ -n "$ver" ] && [ "$(printf '%s\n' "2.1.154" "$ver" | sort -V | head -1)" != "2.1.154" ]; then
+    warn "Claude Code $ver detected; saved workflows need >= 2.1.154 (everything else still works)"
+  elif [ -n "$ver" ]; then
+    ok "Claude Code $ver (>= 2.1.154)"
+  fi
+else
+  warn "'claude' not on PATH — could not verify Claude Code >= 2.1.154"
+fi
+
+# 1. python3 — every hook runs through it. When it is ABSENT, the compile/JSON/mem
+# checks below cannot run; they are skipped with a warn rather than emitting a
+# cascade of misleading 'does not compile' / 'not valid JSON' FAILs (CONF43).
 if command -v python3 >/dev/null 2>&1; then
+  HAVE_PY=1
   ok "python3 on PATH ($(python3 --version 2>&1))"
 else
+  HAVE_PY=0
   bad "python3 not on PATH — every hook is inert"
 fi
 
@@ -30,6 +46,8 @@ for f in "$SRC"/hooks/*.py; do
   t="$DST/hooks/$(basename "$f")"
   if [ ! -f "$t" ]; then
     bad "hook missing: $t (re-run ./install.sh)"
+  elif [ "$HAVE_PY" -eq 0 ]; then
+    warn "hook present but compile-unchecked (no python3): $(basename "$f")"
   elif ! python3 -m py_compile "$t" 2>/dev/null; then
     bad "hook does not compile: $t"
   elif ! cmp -s "$f" "$t"; then
@@ -68,6 +86,8 @@ done
 MEM="$DST/cli/mem.py"
 if [ ! -f "$MEM" ]; then
   bad "mem CLI missing: $MEM (re-run ./install.sh)"
+elif [ "$HAVE_PY" -eq 0 ]; then
+  warn "mem CLI present but unchecked (no python3): $MEM"
 elif ! python3 -m py_compile "$MEM" 2>/dev/null; then
   bad "mem CLI does not compile: $MEM"
 else
@@ -110,6 +130,8 @@ fi
 SETTINGS="$DST/settings.json"
 if [ ! -f "$SETTINGS" ]; then
   bad "settings.json missing — no hooks are wired, the enforcement layer is OFF"
+elif [ "$HAVE_PY" -eq 0 ]; then
+  warn "settings.json present but JSON-unchecked (no python3): $SETTINGS"
 elif ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$SETTINGS" 2>/dev/null; then
   bad "settings.json is not valid JSON — Claude Code will ignore it"
 else

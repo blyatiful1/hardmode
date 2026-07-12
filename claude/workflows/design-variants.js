@@ -14,11 +14,15 @@ const brief = (typeof args === 'string' && args.trim()) ? args.trim() : null
 if (!brief) return { error: 'Usage: /design-variants <design brief — audience, purpose, market, any fixed constraints>' }
 
 // German-market mode: adds a compliance judge and puts the german-market checklist
-// in every builder's brief. Cheap heuristic on the brief text — explicit market
-// keywords OR German-language signals (umlauts/ß, „quotes", GmbH, common function
-// words), since a brief WRITTEN in German is the strongest signal of all. When in
-// doubt, say "German market" in the brief.
-const german = /german|deutsch|germany|dach\b|\.de\b|impressum|dsgvo|[äöüß„]|\bGmbH\b|\bund\b|\beine[nrms]?\b/i.test(brief)
+// in every builder's brief. An explicit market keyword turns it on outright. Absent
+// that, a SINGLE umlaut is not enough — an English brief naming "Motörhead" or
+// "Zürich" must not trip it (CONF26) — so a brief merely WRITTEN in German needs at
+// least two independent language signals. When in doubt, say "German market".
+const germanKeyword = /german|deutsch|germany|dach\b|\.de\b|impressum|dsgvo/i.test(brief)
+const languageSignals = [/[äöüß]/, /„/, /\bGmbH\b/, /\bund\b/i, /\beine[nrms]?\b/i]
+  .filter(re => re.test(brief)).length
+const german = germanKeyword || languageSignals >= 2
+if (german && !germanKeyword) log(`german-market mode enabled by language heuristic (${languageSignals} signals) — add an explicit market keyword to be sure`)
 
 const SKILL_HINT = `If the installed webdesign skill references exist — default location ~/.claude/skills/webdesign/references/, or under $CLAUDE_DIR/skills/webdesign/references/ when that env var is set — read design-views.md${german ? ' AND german-market.md' : ''} from there FIRST and follow them; if absent, proceed from the constraints in this prompt alone.`
 

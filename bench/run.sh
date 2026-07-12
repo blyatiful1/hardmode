@@ -3,6 +3,13 @@
 set -euo pipefail
 ARM=$1; CFG=$2; ROOT=$3
 BENCH="$(cd "$(dirname "$0")" && pwd)"
+# Canonicalize inputs to ABSOLUTE paths BEFORE the `cd "$INST"` below — otherwise a
+# relative <runs-root> or <claude-config-dir> resolves against the instance dir after
+# the cd, so result.json lands in the wrong place and CLAUDE_CONFIG_DIR points nowhere
+# (CONF61). CFG must already exist; ROOT is created here.
+mkdir -p "$ROOT"
+ROOT="$(cd "$ROOT" && pwd)"
+CFG="$(cd "$CFG" && pwd)" || { echo "claude-config-dir not found: $2" >&2; exit 1; }
 INST="$ROOT/$ARM/instance"
 
 rm -rf "$ROOT/$ARM"

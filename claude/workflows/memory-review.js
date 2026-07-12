@@ -13,10 +13,14 @@ const raw = (typeof args === 'string' ? args : '').trim()
 let top = 6
 let minDirty = 8
 let badFlag = null
-raw
+const residue = raw
   .replace(/--top=(\S+)/, (_, v) => { const n = Number(v); if (Number.isInteger(n) && n > 0) top = Math.min(20, n); else badFlag = `--top=${v}`; return '' })
   .replace(/--min-dirty=(\S+)/, (_, v) => { const n = Number(v); if (Number.isInteger(n) && n >= 0) minDirty = n; else badFlag = `--min-dirty=${v}`; return '' })
+  .trim()
 if (badFlag) return { error: `Bad flag ${badFlag}. Usage: /memory-review [--top=N] [--min-dirty=N]` }
+// Reject anything left over (typo'd flag, --min_dirty=, `--top 5` with a space) rather
+// than silently running with defaults — mirrors memory-gc.js (CONF19).
+if (residue) return { error: `Unrecognized argument(s): "${residue}". Usage: /memory-review [--top=N] [--min-dirty=N]` }
 
 // Every agent resolves the memory base the same way the CLI and hooks do — never
 // hardcode ~/.claude, so a scratch CLAUDE_DIR is honored.

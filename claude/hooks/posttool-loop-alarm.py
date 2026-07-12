@@ -1,23 +1,30 @@
 #!/usr/bin/env python3
-"""PostToolUse loop-alarm hook (fable-protocol).
+"""PostToolUse / PostToolUseFailure loop-alarm hook (fable-protocol).
 
 Deterministic backstop for the grinding failure mode: the doctrine's "two failed
 fixes -> oracle" rule is advisory, and the benchmark showed advisory rules get
 skipped under momentum. This hook counts, per session, how many times the SAME
-Bash command has failed since the last file modification. On the 3rd identical
-failure (configurable via FABLE_LOOP_THRESHOLD; use 2 on smaller driver
+Bash command has failed since the last successful file modification. On the 3rd
+identical failure (configurable via FABLE_LOOP_THRESHOLD; use 2 on smaller driver
 models) it injects a one-time nudge (exit 2 -> stderr shown to the model;
 PostToolUse cannot block, the command already ran).
 
-Key design point: any file modification (Edit/Write/NotebookEdit, or a
-file-writing Bash command) clears all counts — re-running a check after a
-change is legitimate iteration. Only "same command, still failing, nothing
-changed in between" accumulates.
+EVENT MODEL (verified against Claude Code 2.1.207 — DO NOT REGRESS)
+    A failing Bash command fires PostToolUseFailure, NOT PostToolUse, and its
+    payload carries NO exit-code/is_error field — failure is signalled by the
+    event itself (plus an `error` string). A succeeding command fires PostToolUse
+    with a `tool_response` and no exit code. The two events are mutually exclusive.
+    So this hook MUST be wired to BOTH events: PostToolUseFailure is the only place
+    it can see a failure, PostToolUse is where it observes the successes that reset
+    the grind counter. The pre-2.1 shape (exit codes inside a PostToolUse
+    tool_response) is still honoured via failed() so the hook works on both.
 
-Failure detection is conservative: a run only counts as failed when the
-tool_response carries an explicit non-zero exit code (or an is_error flag).
-If the payload carries no exit information the hook is inert — fail open,
-never nag on green or unknown runs.
+Key design point: a SUCCESSFUL file modification (Edit/Write/NotebookEdit, or a
+succeeding file-writing Bash command) clears all counts — re-running a check after
+a change is legitimate iteration. A FAILING write-command does NOT reset (a write
+that keeps failing is itself a grind — the CONF0 bug this replaces let such a
+command clear its own count on every run). Only "same command, still failing,
+nothing successfully changed in between" accumulates.
 """
 import json
 import os
@@ -44,9 +51,10 @@ def threshold():
         pass
     return THRESHOLD_DEFAULT
 
-MODIFYING_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+MODIFYING_TOOLS = {"Edit", "Write", "NotebookEdit"}
 # Same conservative "this Bash command plausibly writes files" heuristic as the
-# claim-audit gate (kept in sync by tests/test_loop_alarm.py).
+# claim-audit gate. Kept byte-identical to stop-claim-audit.BASH_WRITE and enforced
+# by tests/test_loop_alarm.py::test_bash_write_in_sync_with_claim_audit.
 BASH_WRITE = re.compile(
     r"(?<![0-9&])>>?\s*(?!&|/dev/(?:null|stdout|stderr)\b)\S"
     r"|(?:^|[|&;]\s*)(?:sed\s+(?:-\S+\s+)*-i|tee\s|patch\s|truncate\s"
@@ -55,7 +63,7 @@ BASH_WRITE = re.compile(
 
 NUDGE = (
     "LOOP ALARM (automated, fires once per command): this exact command has now failed "
-    "{n} times with no file modification in between. Running it again will not produce "
+    "{n} times with no successful change in between. Running it again will not produce "
     "new information. Stop grinding: (1) write the dead hypotheses down, one line each; "
     "(2) run the cheapest DIFFERENT experiment that discriminates between the survivors — "
     "or hand ALL evidence to the `oracle` agent now. A third identical attempt is the "
@@ -64,7 +72,9 @@ NUDGE = (
 
 
 def state_dir():
-    d = os.environ.get("FABLE_STATE_DIR") or os.path.expanduser("~/.claude/tmp/fable-protocol")
+    d = os.environ.get("FABLE_STATE_DIR") or os.path.join(
+        os.environ.get("CLAUDE_DIR") or os.path.expanduser("~/.claude"),
+        "tmp", "fable-protocol")
     os.makedirs(d, exist_ok=True)
     return d
 
@@ -103,7 +113,9 @@ def save_state(path, state):
 
 
 def failed(tool_response):
-    """True only on explicit failure evidence; unknown payloads never count."""
+    """Legacy-CLI failure evidence: an explicit non-zero exit code / is_error flag
+    inside a PostToolUse tool_response. Claude Code 2.1.x omits these (it routes
+    failures to PostToolUseFailure instead), so this only matters on older builds."""
     if not isinstance(tool_response, dict):
         return False
     for key in ("exit_code", "exitCode", "returnCode", "code"):
@@ -124,23 +136,31 @@ def main():
     path = os.path.join(d, f"loop-alarm-{session}.json")
     state = load_state(path)
 
+    event = data.get("hook_event_name", "")
     tool = data.get("tool_name", "")
     tool_input = data.get("tool_input") or {}
     cmd = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
     cmd = re.sub(r"\s+", " ", cmd).strip() if isinstance(cmd, str) else ""
 
-    if tool in MODIFYING_TOOLS or (tool == "Bash" and cmd and BASH_WRITE.search(cmd)):
-        # Something changed — retrying checks is legitimate again.
-        state["counts"] = {}
-        save_state(path, state)
+    # Failure signal: the dedicated PostToolUseFailure event, or (legacy CLIs) an
+    # explicit non-zero exit inside a PostToolUse tool_response.
+    is_failure = event == "PostToolUseFailure" or failed(data.get("tool_response"))
+
+    if not is_failure:
+        # A SUCCESSFUL modification (or succeeding write-command) means iteration
+        # moved forward — retrying checks is legitimate again, so clear everything.
+        if tool in MODIFYING_TOOLS or (tool == "Bash" and cmd and BASH_WRITE.search(cmd)):
+            state["counts"] = {}
+            save_state(path, state)
+            return 0
+        # A non-write Bash command that succeeded clears only its own count.
+        if tool == "Bash" and cmd:
+            state["counts"].pop(cmd, None)
+            save_state(path, state)
         return 0
 
+    # From here: this is a failure. Only Bash commands are tracked for grinding.
     if tool != "Bash" or not cmd:
-        return 0
-
-    if not failed(data.get("tool_response")):
-        state["counts"].pop(cmd, None)
-        save_state(path, state)
         return 0
 
     n = state["counts"].get(cmd, 0) + 1

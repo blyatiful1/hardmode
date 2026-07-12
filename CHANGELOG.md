@@ -1,5 +1,88 @@
 # Changelog
 
+## v2.0 — 2026-07-12
+
+Self-audit pass. The kit was turned on itself: a multi-agent audit swept every subsystem
+(hooks, workflows, skills, agents, installers, mem CLI, bench, tests, docs), and every
+candidate defect was adversarially verified against the code before it counted. 91 findings
+survived verification; this release fixes the load-bearing ones and removes dead weight.
+The headline is a real instance of the exact failure the kit exists to kill — a
+"deterministic" enforcement hook that was silently inert — found in the kit itself and
+proven fixed with tests. Suite: 166 → 183 passing (+13 skipped, unchanged).
+
+### Fixed — enforcement layer (the hooks that must hold)
+- **The loop alarm was deterministically inert on Claude Code 2.1.x.** Verified against the
+  2.1.207 bundle: a failing Bash command fires `PostToolUseFailure` (a distinct event, no
+  exit-code field — failure is signalled by the event itself), NOT `PostToolUse`, where the
+  hook was registered and where it keyed on `tool_response.exit_code` — a field 2.1.x never
+  sends. The kit's headline "deterministic loop alarm" never fired. The hook is now wired to
+  **both** events (`PostToolUseFailure` for failures, `PostToolUse` for the successes that
+  reset the grind counter), treats the failure event as the signal, and still honours legacy
+  exit codes. New unit tests replay real-shaped failure payloads and prove the Nth failure
+  trips the nudge.
+- **Loop alarm cleared its own count on a failing write-command** (`make test > build.log`):
+  the write heuristic ran before failure detection, so a redirecting grind reset itself every
+  run and never tripped. The reset now happens only on SUCCESS.
+- **Test-weakening alarm & claim-audit gate were inert on Windows paths.** `TEST_PATH` matched
+  forward slashes only, so the `tests/`-dir and `test_*.py` heuristics never fired on native
+  Windows (backslash `file_path`). Separators are now normalized in both hooks; added
+  backslash-path tests.
+- **Destructive-guard bypasses closed:** `--force-with-lease` in any *other* segment no longer
+  excuses a bare `--force`; `git checkout ./` and `git checkout ..` now block on a dirty tree;
+  and `FABLE_DESTRUCTIVE_OK=1` must be an actual env-assignment prefix — merely mentioning it in
+  a quoted commit message no longer disables the guard.
+- **Compaction recovery could lose its whole injection** on a slow repo: two 8s git calls under
+  a 10s hook timeout. The protocol text and saved original request are now flushed BEFORE any
+  git call, and the git budget is bounded (3s/call).
+- **Hook state dir now honours `CLAUDE_DIR`** (was hardcoded `~/.claude`), matching the installer
+  and the doctor's own probe.
+
+### Fixed — mem CLI
+- `search`/`show` no longer traceback on a schema-less index (0-byte / clobbered db) — it fails
+  soft like any corrupt index and self-heals on `index --rebuild`.
+- `gc-scan` no longer emits an N-choose-2 explosion of bogus "identical name" duplicate proposals
+  for native per-project `MEMORY.md` files (filename-fallback names are excluded).
+- `REL_DATE` no longer flags bare "now"/"recently" in ordinary prose ("we now use tabs").
+- fts5 and degraded search now tokenize identically, so a query can't hit in one mode and miss in
+  the other.
+- `doctor --privacy` now warns that `mem-index.db` embeds project-memory bodies verbatim and must
+  not be shared — the pattern scan can't read binary sqlite.
+
+### Fixed — workflows, installers, bench
+- `big-task`: `--verify-model` no longer secretly upgrades the *planners* (draft cheap / verify
+  strong); the halt reason distinguishes "repair implementer died" from "failed verification
+  twice"; malformed `--max-steps` is rejected, not swallowed.
+- `bug-hunt`, `memory-gc`, `memory-review`, `paranoid-review`, `design-variants`: honest exit-cause
+  messages, correct dry-run counts, leftover-arg rejection, budget-path dedup, and a two-signal
+  German-market heuristic (a single umlaut no longer flips English briefs into German mode).
+- `check-workflows.mjs` now scopes the meta-field check to the meta literal and fails on
+  `Date.now()`/`Math.random()`/`new Date()` (resume-breaking non-determinism).
+- `install.sh`: locale-independent (`LC_ALL=C`) manifest sort to preserve byte-parity with the
+  PowerShell installer; `--help` prints only the header block.
+- `doctor.sh`: python3-dependent checks are skipped-with-warn when python3 is absent instead of
+  cascading false "does not compile"/"not valid JSON" FAILs; both doctors gained the Claude Code
+  ≥ 2.1.154 version check.
+- `bench/run.sh` canonicalizes relative `<runs-root>`/`<config-dir>` before `cd`; `bench/score.py`
+  guards missing chore files, survives a hung acceptance run, preserves the caller's `PATH`, and
+  its claims audit is now negation-aware (in sync with the Stop-hook gate). Added behavioral
+  score.py tests.
+
+### Changed — doctrine & docs honesty
+- The `fable` skill no longer self-authorizes Workflow runs on auto-trigger; doctrine no longer
+  tells the model to self-launch `/memory-gc` (both now defer to the orchestration opt-in gate).
+- Doctrine's destructive-guard description corrected (it does not guard history rewrites).
+- README: privacy-seed path, agent table, Python 3.11 note for the privacy layer, and the
+  loop-alarm known-limit all corrected to match the code; RESEARCH's "every component
+  live-verified" claim scoped to v1.0/v1.1.
+
+### Removed
+- `claude/cli/privacy.toml.example` — a dead, byte-identical duplicate of `claude/memory/privacy.toml`
+  that nothing installed or read.
+- `MultiEdit` — the tool no longer exists in Claude Code 2.1.x; removed from every matcher,
+  `MODIFYING_TOOLS` set, and hook branch.
+- Dead code: `big-task.js`'s unused `commits` array, `mem.py`'s unused `FTS_COLUMNS`, a redundant
+  settings-JSON test, and a no-op `env=os.environ.copy()`.
+
 ## v1.9 — 2026-07-09
 
 Windows pass + README redesign. The kit's discipline layer was always OS-portable — the
@@ -114,9 +197,10 @@ synonym-recall misses).
   one-line why-global; advisory, since the deterministic gate is the privacy-guard hook), a
   `visibility: private|shareable` field, an `open-loop` memory type, and hygiene rules
   (falsifiable conclusions, update-don't-duplicate, delete-what-evidence-refutes).
-- **`privacy.toml.example`** — conservative, ships EMPTY (necessary-not-sufficient by design);
-  `install.sh` copies it to `~/.claude/memory/privacy.toml` only if absent and bootstraps
-  `mem index --rebuild` once so the corpus is indexed before any SessionEnd fires.
+- **`claude/memory/privacy.toml`** — the work-marker pattern seed, conservative and shipping
+  EMPTY (necessary-not-sufficient by design); `install.sh` copies it to
+  `~/.claude/memory/privacy.toml` only if absent and bootstraps `mem index --rebuild` once so
+  the corpus is indexed before any SessionEnd fires.
 - Doctrine pointer (`claude/CLAUDE.md`): search the cross-project corpus before re-deriving,
   promote worth-keeping lessons global via postmortem, run `/memory-gc` when the corpus feels
   stale. README gains a fable-mem section, tree entries, playbook rows, and three Known-limits
@@ -162,7 +246,7 @@ load-bearing legal/technical claims were adversarially verified before authoring
   README tree + playbook rows.
 - `tests/test_webdesign_skill.py` — trigger-surface frontmatter, reference routing,
   the load-bearing law names, taxonomy coverage, and the installer/doctor
-  regressions below. Suite: 100 → 110.
+  regressions below. Suite: 100 → 111.
 
 ### Changed
 - **`install.sh` installs skills as whole directories** — previously only `SKILL.md`

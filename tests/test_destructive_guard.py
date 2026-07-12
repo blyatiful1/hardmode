@@ -43,6 +43,9 @@ def test_checkout_discard_blocked_on_dirty_tree(tmp_path):
     repo = make_repo(tmp_path, dirty=True)
     assert run_hook("git checkout -- .", cwd=repo).returncode == 2
     assert run_hook("git checkout .", cwd=repo).returncode == 2
+    # CONF4: `git checkout ./` and `git checkout ..` are the same tree-destroyer.
+    assert run_hook("git checkout ./", cwd=repo).returncode == 2
+    assert run_hook("git checkout ..", cwd=repo).returncode == 2
 
 
 def test_checkout_branch_allowed(tmp_path):
@@ -76,6 +79,18 @@ def test_force_push_blocked_lease_allowed(tmp_path):
     assert run_hook("git push -f origin main", cwd=repo).returncode == 2
     assert run_hook("git push --force-with-lease origin main", cwd=repo).returncode == 0
     assert run_hook("git push -u origin main", cwd=repo).returncode == 0
+
+
+def test_force_with_lease_elsewhere_does_not_excuse_bare_force(tmp_path):
+    # CONF3: --force-with-lease in a DIFFERENT segment (a chained safe push, an echo)
+    # must not suppress the block on a bare --force in its own segment.
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook(
+        'git push --force origin main && echo "prefer --force-with-lease next time"',
+        cwd=repo).returncode == 2
+    assert run_hook(
+        "git push --force-with-lease origin a && git push --force origin b",
+        cwd=repo).returncode == 2
 
 
 def test_plus_refspec_force_push_blocked(tmp_path):
@@ -126,6 +141,17 @@ def test_quoted_rm_target_still_blocked():
 def test_override_token_allows(tmp_path):
     repo = make_repo(tmp_path, dirty=True)
     assert run_hook("FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+    # Also valid as a segment-leading assignment after a separator.
+    assert run_hook("cd repo; FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+
+
+def test_override_only_as_assignment_not_mere_mention(tmp_path):
+    # CONF5: the override string inside a quoted commit message (or any non-assignment
+    # position) must NOT disable the guard for the rest of the command.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook(
+        'git commit -m "set FABLE_DESTRUCTIVE_OK=1 to bypass" && git reset --hard',
+        cwd=repo).returncode == 2
 
 
 def test_non_git_cwd_fails_open(tmp_path):

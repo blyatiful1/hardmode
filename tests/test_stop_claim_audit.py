@@ -117,6 +117,15 @@ def test_test_file_edit_adds_weakening_audit(tmp_path):
     assert "weakened" in r.stderr
 
 
+def test_windows_backslash_test_edit_adds_weakening_audit(tmp_path):
+    # CONF1: on native Windows the Edit payload's file_path uses backslashes; the
+    # gate must still recognize it as a test file and attach the weakening addendum.
+    r = run_hook(tmp_path, [tool_entry("Edit", file_path=r"C:\repo\tests\test_parser.py")],
+                 last_message="All tests pass now — done.")
+    assert r.returncode == 2
+    assert "weakened" in r.stderr
+
+
 def test_non_test_edit_has_no_weakening_audit(tmp_path):
     r = run_hook(tmp_path, [tool_entry("Edit", file_path="src/parser.py")],
                  last_message="All tests pass now — done.")

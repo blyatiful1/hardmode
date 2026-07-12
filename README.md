@@ -22,7 +22,7 @@ It is **not** a persona pack, not a mega-framework, and not magic. It is a small
 
 ## Install
 
-Requires Claude Code ≥ 2.1.154 (saved workflows) and Python 3 — the hooks and the mem CLI are stdlib-only, no pip.
+Requires Claude Code ≥ 2.1.154 (saved workflows) and Python 3 — the hooks and the mem CLI are stdlib-only, no pip. The memory **privacy layer** (privacy-guard hook, `mem doctor --privacy`) additionally needs Python **3.11+** for `tomllib`; on older Pythons everything else works but the privacy guard fails open (no patterns loaded).
 
 ### macOS / Linux
 
@@ -90,7 +90,7 @@ Full research with sources: [docs/RESEARCH.md](docs/RESEARCH.md).
 |---|---|---|
 | **Doctrine** | `CLAUDE.md` (~45 lines, lean by design) | advisory — read every session |
 | **Hooks** (9) | claim-audit gate, loop alarm, test-weakening alarm, destructive guard, compaction save/recover, memory recall/journal/privacy-guard | **deterministic** — cannot be skipped under momentum |
-| **Agents** (3) | `verifier`, `plan-critic`, `oracle` | adversarial, fresh-context, xhigh |
+| **Agents** (3) | `verifier`, `plan-critic`, `oracle` | fresh-context (verifier/plan-critic adversarial at xhigh; oracle a max-effort consultant) |
 | **Workflows** (8) | `/paranoid-review`, `/verify-claim`, `/deep-plan`, `/bug-hunt`, `/big-task`, `/design-variants`, `/memory-review`, `/memory-gc` | multi-agent, budget-guarded |
 | **Skills** (5) | `fable` (the flagship staged protocol), `webdesign`, `orchestrate`, `postmortem`, `memory-search` | stakes-matched ceremony |
 | **CLI** | `mem.py` — cross-project memory index/recall (sqlite FTS5, stdlib-only) | disposable index, fail-open |
@@ -174,8 +174,10 @@ claude/
     mem.py                     the fable-mem index/recall CLI (sqlite3 FTS5, no pip):
                                index · search · show · stats · doctor · gc-scan over
                                the global + every per-repo corpus
-    privacy.toml.example       work-marker patterns; installed to
-                               ~/.claude/memory/privacy.toml only if absent
+  memory/
+    privacy.toml               work-marker patterns; seeded to
+                               ~/.claude/memory/privacy.toml only if absent (never
+                               overwritten — your tuned patterns are yours)
   settings/
     settings-snippet.json            effortLevel xhigh + all nine hooks wired
     settings-snippet-small.json      same, plus FABLE_LOOP_THRESHOLD=2 for small drivers
@@ -211,7 +213,7 @@ Claude Code's native auto-memory is per-git-repo: a decision banked in repo A is
 
 - **Recall without asking.** A UserPromptSubmit hook runs one read-only FTS5 query against a local sqlite index and injects at most three memory pointers (title + one-line description + path — never bodies) as inert, labelled reference data. Threshold-gated, ~600-token budget, per-session dedupe: silence over noise. Cross-repo, so a lesson from project A surfaces while you work in project B.
 - **A breadcrumb every session.** A SessionEnd hook appends one NDJSON line (timestamp, cwd, git root + branch + dirty-file count, end reason) to `~/.claude/memory/journal.ndjson` — a deterministic trace even when the session banked nothing — then runs an incremental reindex so this session's memory is searchable in the next. `/memory-review` mines that journal for high-activity sessions that banked nothing and proposes what was worth keeping.
-- **The promotion boundary is a hook, not a rule.** The one line that must hold is project → global: a work marker (internal ticket id, private hostname, client codename) must never cross into the shared corpus. A PreToolUse guard scans the pending content of any **Write/Edit/MultiEdit** into `~/.claude/memory/` against your `privacy.toml` and blocks it (exit 2) before the marker lands; it matches those tools, not Bash/interpreter writes (`cp`/`cat >>`/`python3 -c`), so `mem doctor --privacy` is the detective backstop that sweeps the whole corpus dir — including the `.ndjson` journal — for anything the write-time gate didn't see.
+- **The promotion boundary is a hook, not a rule.** The one line that must hold is project → global: a work marker (internal ticket id, private hostname, client codename) must never cross into the shared corpus. A PreToolUse guard scans the pending content of any **Write/Edit** into `~/.claude/memory/` against your `privacy.toml` and blocks it (exit 2) before the marker lands; it matches those tools, not Bash/interpreter writes (`cp`/`cat >>`/`python3 -c`), so `mem doctor --privacy` is the detective backstop that sweeps the whole corpus dir — including the `.ndjson` journal — for anything the write-time gate didn't see.
 - **Hygiene that proposes, never deletes.** `mem gc-scan` mechanically flags near-duplicates, stale entries, relative-date offenders, and same-topic pairs; `/memory-gc` adds three-way contradiction judges and rebuilds the index. Every removal comes back as a proposal — the corpus is never mutated out from under you.
 - **Verifiable install.** The doctor scripts check the CLI compiles and report its FTS mode, that the memory dir is writable, and that all three hooks are wired — the same no-silently-inert guarantee the rest of the kit gets.
 
@@ -274,7 +276,7 @@ npx skills add juliusbrussee/caveman --skill caveman-commit -g -a claude-code -y
 The kit targets **failure modes, not model IDs** — nothing in it hardcodes `claude-opus-4-8`. When your subscription's default model changes (an Opus 4.9/5, a Sonnet that inherits the agentic crown, or Mythos-class access), the failure-mode table above is the checklist to re-run, and three assumptions are the ones most likely to break:
 
 1. **`effortLevel: "xhigh"` semantics.** On Opus 4.8 it is THE lever; a successor may rename the levels, change the default, or recalibrate what xhigh buys. Check the model's migration guide before assuming the snippet's value is still optimal — an effort knob left at the wrong tier is either wasted spend or a silent downgrade.
-2. **Hook payload contracts.** The loop alarm keys off explicit exit codes in `tool_response`; the claim-audit gate reads `last_assistant_message` and the transcript JSONL shape; blocking relies on the exit-2 + stderr protocol. All three are Claude Code contracts, not model contracts, but they drift with CLI versions — after any major update, re-run the doctor script and the one-minute live checks in Known limits.
+2. **Hook payload contracts.** The loop alarm is wired to both `PostToolUse` and `PostToolUseFailure` — the latter is where Claude Code 2.1.x delivers a failing Bash command (a distinct event, no exit-code field, failure signalled by the event itself); the claim-audit gate reads `last_assistant_message` and the transcript JSONL shape; blocking relies on the exit-2 + stderr protocol. All are Claude Code contracts, not model contracts, but they drift with CLI versions — after any major update, re-run the doctor script and the one-minute live checks in Known limits.
 3. **Which failure modes still exist.** The deterministic layer (hooks) is cheap insurance on any model — a stronger model just trips it less. The *ceremony* layer (multi-agent review, staged protocol) is where to downshift first: if a successor model stops producing false completion claims on the bench task, `bench/` will show it (rerun is one command), and you can retire the corresponding ceremony instead of paying for rigor the model no longer needs.
 
 The bench harness is the kit's own succession plan: measure the new model stock vs kitted, keep what still earns its cost, drop what doesn't.
@@ -284,11 +286,11 @@ Going the other direction — running the kit on a **smaller** driver model (a S
 ## Known limits
 
 - `CLAUDE_CODE_MAX_OUTPUT_TOKENS=64000` is best-effort: harmless (clamped per model), but whether it raises the effective cap is **unverified** — the kit's own doctrine requires saying so.
-- The loop-alarm hook counts a run as *failed* only when the PostToolUse payload carries an explicit exit code / error flag. If your Claude Code version omits exit information from Bash `tool_response`, the alarm is silently inert (fail-open by design) — verify once with a deliberately failing command repeated 3×.
+- The loop-alarm hook treats a failure as the `PostToolUseFailure` event (Claude Code 2.1.x routes failing Bash commands there, not to `PostToolUse`), and still honours an explicit exit code inside a legacy `PostToolUse` `tool_response`. If a future CLI renames or drops that failure event, the alarm goes silently inert (fail-open by design) — verify once with a deliberately failing command repeated 3×, and see the CLI-version note in the hook's docstring.
 - The test-weakening alarm reads Edit/Write payloads, so a skip marker smuggled in via a Bash heredoc doesn't trip it at edit time — but the claim-audit gate now flags any file-writing Bash command that names a test path, so the stop-time audit still fires.
 - The destructive-command guard is a tripwire, not a jail: known bypass classes include commands wrapped in `sh -c '...'`, destructive flags hidden by quoting (`git reset '--hard'`), and some `rm -rf` variants (`~/*`, `./*`). The claim-audit gate similarly misses file writes done through interpreters (`python3 -c`) and some multi-line Bash forms. These hooks raise the cost of the documented *reflexive* failure modes; they do not stop a determined evader — pair them with the doctrine, and treat any deliberate bypass in a transcript as the incident.
 - The fable-mem session journal and its reindex run on SessionEnd, which fires on graceful exit (`/clear`, resume, logout, quit) but is **not** guaranteed on a hard crash or SIGKILL — a session killed mid-flight leaves no breadcrumb, and its memory waits for the next SessionEnd to be indexed. The corpus files are never at risk (the model writes them during the session); only the journal line and index freshness are.
-- The privacy guard's `privacy.toml` patterns are **necessary, not sufficient**: they block the markers you list, not the ones you forgot. The list ships empty and conservative so a fresh install never false-positives — which means it catches nothing until you fill in your real work markers. Treat it as a tripwire for known-shaped leaks, not a classifier, and run `mem doctor --privacy` before promoting. The guard is also **tool-scoped**: it fires on `Write|Edit|MultiEdit` into the corpus, not on Bash/interpreter writes (`cp`/`mv`/`cat >>`/`python3 -c`) — the same interpreter-bypass class the destructive-guard and claim-audit gates document — so a promotion done by copying rather than re-writing lands unscanned; `mem doctor --privacy` (which now sweeps the `.ndjson` journal too, not just `*.md`) is the backstop.
+- The privacy guard's `privacy.toml` patterns are **necessary, not sufficient**: they block the markers you list, not the ones you forgot. The list ships empty and conservative so a fresh install never false-positives — which means it catches nothing until you fill in your real work markers. Treat it as a tripwire for known-shaped leaks, not a classifier, and run `mem doctor --privacy` before promoting. The guard is also **tool-scoped**: it fires on `Write|Edit` into the corpus, not on Bash/interpreter writes (`cp`/`mv`/`cat >>`/`python3 -c`) — the same interpreter-bypass class the destructive-guard and claim-audit gates document — so a promotion done by copying rather than re-writing lands unscanned; `mem doctor --privacy` (which now sweeps the `.ndjson` journal too, not just `*.md`) is the backstop.
 - fable-mem claims `~/.claude/memory/` because no native feature uses it: main-session auto-memory is per-repo (`~/.claude/projects/<p>/memory/`) and native "user scope" memory is **per-subagent islands** (`~/.claude/agent-memory/<name>/`), not a shared cross-project store. If a future Claude Code ships a real shared user-memory surface at that path, re-check for collision before upgrading.
 - **The Windows port is CI-verified, not yet session-verified.** `install.ps1`/`doctor.ps1` and the snippet parity are exercised end-to-end on `windows-latest` in CI, but no live Claude Code session pass has been run on native Windows — the hook payload contracts are OS-independent Claude Code contracts, so they *should* hold; run `doctor.ps1` plus the one-minute live checks above after installing and treat any drift as a bug to report. On native Windows the hooks also depend on Git Bash being installed (it is the hook command shell).
 - No prompt kit closes the gap on the longest-horizon work (multi-hour autonomous runs); route those to a stronger model when available.
@@ -300,4 +302,4 @@ Researched, written, adversarially self-reviewed, and live-verified by **Claude 
 
 MIT — see [LICENSE](LICENSE).
 
-*"Feeling confident is not evidence." — the fable skill, Stage 0*
+*"Feeling confident is not evidence." — the fable skill*

@@ -30,8 +30,10 @@ headless run sits next to the instance dir, that audit is automated
 (`final_message_claims_done` / `false_completion_claim`, same claim regex the Stop-hook gate
 enforces — sync guarded by `tests/test_bench.py`).
 
-Sanity anchors (re-run them if you change the task): pristine task scores **1/15**,
-a hand-written golden solution scores **15/15**.
+Sanity anchors (re-run them if you change the task): the pristine task scores **1/15**
+(this one is shipped and CI-enforced — `bench/acceptance/test_acceptance.py`), and a
+correct hand-written solution should score **15/15** (measured during development; no
+golden tree ships, so re-derive one if you re-plant the bugs and want the upper anchor).
 
 ## Running an arm
 
@@ -47,7 +49,7 @@ arm's config. Score afterwards with `score.py`.
 Config dirs (both need a copied `.credentials.json` + minimal `.claude.json`):
 
 - **vanilla** — `settings.json` = `{}`. Nothing else. Stock Opus 4.8 at default effort.
-- **hyper** — this repo's `claude/` contents (CLAUDE.md, agents, workflows, skills) +
+- **hyper** — this repo's `claude/` contents (CLAUDE.md, agents, workflows, skills, hooks, cli — everything install.sh ships, the benchmarked claim-audit gate included) +
   `settings-snippet.json` as settings (xhigh effort). Exactly what `install.sh` ships.
 
 Fairness controls: identical prompt, identical pristine repo, identical model/flags/permission

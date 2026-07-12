@@ -14,7 +14,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --tier) TIER="${2:?--tier needs a value (small|opus)}"; shift 2 ;;
     --strong-model) STRONG_MODEL="${2:?--strong-model needs a model name, e.g. opus}"; shift 2 ;;
-    -h|--help) grep '^#' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) awk 'NR==1{next} /^#/{sub(/^# ?/,"");print;next} {exit}' "$0"; exit 0 ;;
     *) echo "unknown flag: $1 (see --help)"; exit 1 ;;
   esac
 done
@@ -27,7 +27,8 @@ STAMP="$(date +%Y%m%d-%H%M%S)"
 # left inside skills/ would itself be loaded by Claude Code as a duplicate skill.
 BAK="$DST/fable-protocol-backups/$STAMP"
 
-# backup <target> <relative-name> — move the existing target into the backup dir.
+# backup <target> <relative-name> — copy the existing target into the backup dir
+# (the original stays in place; the copy is the safety net before it is overwritten).
 backup() {
   [ -e "$1" ] || return 0
   mkdir -p "$BAK/$(dirname "$2")"
@@ -46,7 +47,7 @@ identical() { [ -f "$2" ] && cmp -s "$1" "$2"; }
 skill_unchanged() {
   local f rel
   [ -f "$2/.fable-manifest" ] || return 1
-  diff -q <(cd "$1" && find . -type f | sort) "$2/.fable-manifest" >/dev/null 2>&1 || return 1
+  diff -q <(cd "$1" && find . -type f | LC_ALL=C sort) "$2/.fable-manifest" >/dev/null 2>&1 || return 1
   while IFS= read -r -d '' f; do
     rel="${f#"$1"/}"
     cmp -s "$f" "$2/$rel" || return 1
@@ -99,7 +100,7 @@ for d in "$SRC"/skills/*/; do
   skill_unchanged "${d%/}" "$t" && { echo "  skill:    $name (unchanged)"; continue; }
   backup "$t" "skills/$name"; prune_stale_skill_files "${d%/}" "$t"
   mkdir -p "$t"; cp -r "${d%/}"/. "$t"/
-  (cd "${d%/}" && find . -type f | sort) > "$t/.fable-manifest"
+  (cd "${d%/}" && find . -type f | LC_ALL=C sort) > "$t/.fable-manifest"
   echo "  skill:    $name"
 done
 for f in "$SRC"/hooks/*.py; do

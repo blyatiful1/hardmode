@@ -149,7 +149,10 @@ This writes only the disposable index, never a memory file. Report the command's
 )
 if (rebuilt == null) log('reindex agent died — run `python3 $CLAUDE_DIR/cli/mem.py index --rebuild` by hand')
 
-log(`memory-gc done — ${contradictions.length + nearDup.length + stale.length} deletion/merge proposal(s), ${dateFix.rewritten.length} date fix(es) ${dryRun ? 'proposed' : 'applied'}`)
+// In --dry-run the date fixes are PROPOSED (they land in dateFix.skipped, not
+// .rewritten), so report the candidate count, not the applied count (CONF18).
+const dateFixCount = dryRun ? relDates.length : dateFix.rewritten.length
+log(`memory-gc done — ${contradictions.length + nearDup.length + stale.length} deletion/merge proposal(s), ${dateFixCount} date fix(es) ${dryRun ? 'proposed' : 'applied'}`)
 return {
   dryRun,
   scan: { nearDuplicates: nearDup.length, stale: stale.length, relativeDates: relDates.length, sameTopicPairs: topicPairs.length },
