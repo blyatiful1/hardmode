@@ -75,7 +75,7 @@ The Fable→Opus gap is concentrated in **long-horizon discipline, not per-token
 | Losing the thread after compaction ([#13112](https://github.com/anthropics/claude-code/issues/13112) and 4+ open feature requests) | **Deterministic compaction recovery** — a PreCompact hook saves the original request verbatim; the SessionStart(compact) hook injects it back plus the actual git state |
 | Plausible-but-wrong conclusions surviving | `/verify-claim` (3 refuters, distinct lenses, fail-closed vote) and `/paranoid-review` (coverage-first finders → adversarial verifiers) |
 | Review filters silently dropping findings (Anthropic prompting guide) | Coverage-first finder prompts + **three-way verdicts** (confirmed / refuted / unverified — nothing silently dropped) |
-| Grinding in overthinking/fix loops | Observable loop-detection rule + `oracle` escalation + **deterministic loop-alarm hook** (3rd identical failing command with no file change in between → forced stop-and-reassess) |
+| Grinding in overthinking/fix loops | Observable loop-detection rule + `oracle` escalation + **deterministic loop-alarm hook** (3rd identical failing command with no successful change in between → forced stop-and-reassess) |
 | Weakening tests to force a green run (reward hacking) | Doctrine rule + **test-weakening alarm hook** (deterministic; fires the moment a skip/disable marker is added to a test file) + the claim-audit gate calls it out whenever test files were edited under a completion claim |
 | Destroying uncommitted work with reflexive `reset --hard`/`checkout --` | **Destructive-command guard hook** — blocks unrecoverable ops when work would be lost; user-approved override only |
 | Sycophancy undermining review | Anti-sycophancy calibration rules |
@@ -146,7 +146,7 @@ claude/
                                bench/RESULTS.md); flags possible test-weakening when test
                                files were edited; negation-aware, fails open, unit-tested
     posttool-loop-alarm.py     deterministic grind detector: the same command failing 3x
-                               with no file modification in between gets a one-time
+                               with no successful change in between gets a one-time
                                stop-and-reassess injection (route to oracle)
     posttool-test-weakening-alarm.py  fires the moment an Edit/Write ADDS a skip/disable
                                marker (@pytest.mark.skip, it.skip, t.Skip, #[ignore],

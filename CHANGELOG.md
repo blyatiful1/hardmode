@@ -78,8 +78,10 @@ proven fixed with tests. Suite: 166 → 183 passing (+13 skipped, unchanged).
 ### Removed
 - `claude/cli/privacy.toml.example` — a dead, byte-identical duplicate of `claude/memory/privacy.toml`
   that nothing installed or read.
-- `MultiEdit` — the tool no longer exists in Claude Code 2.1.x; removed from every matcher,
-  `MODIFYING_TOOLS` set, and hook branch.
+- `MultiEdit` — the tool no longer exists in Claude Code 2.1.x; removed from every settings
+  matcher, the alarm hooks' `MODIFYING_TOOLS` sets and edit branch, and the user-facing docs.
+  (The privacy guard keeps a generic batch-`edits` scan as forward-compat defense, no longer
+  named after MultiEdit.)
 - Dead code: `big-task.js`'s unused `commits` array, `mem.py`'s unused `FTS_COLUMNS`, a redundant
   settings-JSON test, and a no-op `env=os.environ.copy()`.
 

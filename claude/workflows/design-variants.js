@@ -13,16 +13,16 @@ export const meta = {
 const brief = (typeof args === 'string' && args.trim()) ? args.trim() : null
 if (!brief) return { error: 'Usage: /design-variants <design brief — audience, purpose, market, any fixed constraints>' }
 
-// German-market mode: adds a compliance judge and puts the german-market checklist
-// in every builder's brief. An explicit market keyword turns it on outright. Absent
-// that, a SINGLE umlaut is not enough — an English brief naming "Motörhead" or
-// "Zürich" must not trip it (CONF26) — so a brief merely WRITTEN in German needs at
-// least two independent language signals. When in doubt, say "German market".
-const germanKeyword = /german|deutsch|germany|dach\b|\.de\b|impressum|dsgvo/i.test(brief)
-const languageSignals = [/[äöüß]/, /„/, /\bGmbH\b/, /\bund\b/i, /\beine[nrms]?\b/i]
-  .filter(re => re.test(brief)).length
-const german = germanKeyword || languageSignals >= 2
-if (german && !germanKeyword) log(`german-market mode enabled by language heuristic (${languageSignals} signals) — add an explicit market keyword to be sure`)
+// German-market mode: adds a compliance judge and puts the german-market checklist in
+// every builder's brief. The gate is legally load-bearing, so it errs toward ON: an
+// explicit market keyword OR a STRONG single signal (GmbH / Impressum / AGB — each
+// unambiguously German-market) turns it on outright. WEAK signals (a lone umlaut, „,
+// "und"/"eine") could be an English brief naming "Motörhead" or "Zürich" (CONF26), so
+// those require two before triggering. When in doubt, say "German market".
+const germanKeyword = /german|deutsch|germany|dach\b|\.de\b|impressum|dsgvo|\bGmbH\b|\bAGB\b|\bBFSG\b|\bTTDSG\b|\bTDDDG\b/i.test(brief)
+const weakSignals = [/[äöüß]/, /„/, /\bund\b/i, /\beine[nrms]?\b/i].filter(re => re.test(brief)).length
+const german = germanKeyword || weakSignals >= 2
+if (german && !germanKeyword) log(`german-market mode enabled by ${weakSignals} weak language signals — name the market explicitly to be sure`)
 
 const SKILL_HINT = `If the installed webdesign skill references exist — default location ~/.claude/skills/webdesign/references/, or under $CLAUDE_DIR/skills/webdesign/references/ when that env var is set — read design-views.md${german ? ' AND german-market.md' : ''} from there FIRST and follow them; if absent, proceed from the constraints in this prompt alone.`
 

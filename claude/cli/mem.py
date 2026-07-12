@@ -390,10 +390,13 @@ def keywords(text):
 
 
 def _fts_match(query):
-    # Use the SAME token filter as the degraded path (keywords(): len>2, stopwords
-    # dropped) so fts5 and LIKE modes agree on which tokens count — otherwise the same
-    # query could hit in one mode and return nothing in the other (CONF57).
-    toks = keywords(query)
+    # fts5 keeps EVERY token, including short ones and stopwords: unicode61 matches whole
+    # tokens (so "go"/"ci"/"os"/"db" match the term, not substrings) and bm25 ranks
+    # stopwords harmlessly. The degraded LIKE path deliberately filters via keywords()
+    # (len>2, stopwords) because a substring LIKE on "go" would match "goofy"/"ago". The
+    # two tokenizers differ ON PURPOSE — forcing fts5 through keywords() silently dropped
+    # every 2-char tech-term query ("go", "ai", "k8s"->ok) from the common fts5 mode.
+    toks = WORD.findall(query)
     if not toks:
         return None
     return " OR ".join('"%s"' % t for t in toks)

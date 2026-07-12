@@ -69,6 +69,12 @@ def main():
 
     r = _run_pytest([py, "-m", "pytest", "-v", "--tb=no", str(BENCH / "acceptance")],
                     INSTANCE=str(instance))
+    # A hung acceptance run (returncode 124 from _run_pytest) may have printed some
+    # PASSED lines before timing out — scoring those partials would be a plausible-looking
+    # but wrong total, so fail loudly instead of quietly under-scoring (CONF63/C7).
+    if r.returncode == 124:
+        print(r.stdout, r.stderr, file=sys.stderr)
+        sys.exit("acceptance suite TIMED OUT — cannot score (instance likely hangs)")
     items, total = {}, 0
     for name, (label, pts) in POINTS.items():
         passed = bool(re.search(rf"{name}(?:\[.*\])? PASSED", r.stdout))

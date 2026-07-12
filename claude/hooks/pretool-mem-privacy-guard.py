@@ -7,12 +7,12 @@ WHY THIS EXISTS
     hostname, client codename) must NEVER cross into the machine-wide global corpus
     at `$BASE/memory/`. Advisory SKILL.md text is not enough — under momentum the
     model promotes anyway. This hook makes the boundary DETERMINISTIC: on any
-    Write/Edit/MultiEdit whose target resolves under `$BASE/memory/`, it scans the
+    Write/Edit whose target resolves under `$BASE/memory/`, it scans the
     PENDING content against the user's `privacy.toml` patterns and BLOCKS the write
     (exit 2 — the tool does NOT run) on any hit, BEFORE the marker can land. Writes
     outside the global corpus, and clean payloads, pass untouched.
 
-    SCOPE (not a jail): this matches the Write/Edit/MultiEdit tools only. A promotion
+    SCOPE (not a jail): this matches the Write/Edit tools only. A promotion
     done through Bash (`cp`/`mv`/`cat >> ~/.claude/memory/x.md`) or an interpreter
     (`python3 -c`) does NOT carry a `file_path`/`content` this hook can see, so it is
     not scanned at write time — the same interpreter-bypass class the kit's other
@@ -92,8 +92,9 @@ def under_global_corpus(target, base):
 
 
 def pending_text(tool_input):
-    """Gather every chunk of content this write would introduce: Write.content,
-    Edit.new_string, and each MultiEdit edit's new_string."""
+    """Gather every chunk of content this write would introduce: Write.content and
+    Edit.new_string. Also scans a batch `edits` list defensively (any future
+    multi-edit-shaped payload), so a batched write can't slip a marker past the guard."""
     chunks = []
     if not isinstance(tool_input, dict):
         return chunks

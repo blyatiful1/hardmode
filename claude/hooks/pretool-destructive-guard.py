@@ -6,7 +6,7 @@ or `git checkout -- .` destroys hours of uncommitted work. This hook blocks
 (exit 2 — the command does NOT run) the small set of genuinely unrecoverable
 operations, in two tiers:
 
-  * working-tree destroyers (reset --hard, checkout --/-f/. , restore,
+  * working-tree destroyers (reset --hard, checkout --/-f/./.. , restore,
     switch -f/--discard-changes, clean -f) — blocked ONLY when
     `git status --porcelain` shows uncommitted or untracked work to lose;
     on a clean tree they pass untouched.

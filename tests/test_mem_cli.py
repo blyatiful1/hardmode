@@ -104,6 +104,17 @@ def test_search_fts5_returns_the_matching_slug(tmp_path):
     assert "unrelated" not in slugs
 
 
+def test_fts_search_matches_short_tech_terms(tmp_path):
+    # A 2-char token like "go"/"ci" must still match in the common fts5 mode. unicode61
+    # token-matches (not substrings), so short tokens are safe there — the degraded LIKE
+    # path filters them only to avoid substring noise. Forcing the two to share the
+    # len>2 filter silently dropped every short-term query.
+    write_memory(global_dir(tmp_path), "golang.md", "Go language notes", "go build tips")
+    run(tmp_path, "index")
+    hits = json.loads(run(tmp_path, "search", "go", "--json").stdout)
+    assert any(h["slug"] == "golang" for h in hits), hits
+
+
 def test_search_scope_filter_excludes_project_hits(tmp_path):
     write_memory(global_dir(tmp_path), "g.md",
                  "Kafka consumer lag", "global note about kafka lag")
