@@ -1,16 +1,25 @@
-# Unit tests for the PostToolUse loop-alarm hook.
+# Unit tests for the PostToolUse / PostToolUseFailure loop-alarm hook.
+import importlib.util
 import json
 import os
 import subprocess
 import sys
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parents[1] / "claude" / "hooks" / "posttool-loop-alarm.py"
+HOOKS = Path(__file__).resolve().parents[1] / "claude" / "hooks"
+HOOK = HOOKS / "posttool-loop-alarm.py"
+
+
+def _load(name):
+    spec = importlib.util.spec_from_file_location(name.replace("-", "_"), HOOKS / name)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def run_hook(state_dir, tool_name, tool_input=None, tool_response=None,
-             session="s1", raw_stdin=None):
-    payload = {"session_id": session, "tool_name": tool_name,
+             session="s1", raw_stdin=None, event="PostToolUse"):
+    payload = {"session_id": session, "hook_event_name": event, "tool_name": tool_name,
                "tool_input": tool_input or {}, "tool_response": tool_response or {}}
     env = dict(os.environ, FABLE_STATE_DIR=str(state_dir))
     return subprocess.run(
@@ -21,7 +30,14 @@ def run_hook(state_dir, tool_name, tool_input=None, tool_response=None,
 
 
 def fail_bash(state_dir, cmd, **kw):
+    # Legacy shape: PostToolUse carrying an explicit non-zero exit code.
     return run_hook(state_dir, "Bash", {"command": cmd}, {"exit_code": 1}, **kw)
+
+
+def fail_event(state_dir, cmd, **kw):
+    # Real 2.1.x shape: a dedicated PostToolUseFailure event with NO exit code.
+    return run_hook(state_dir, "Bash", {"command": cmd}, {},
+                    event="PostToolUseFailure", **kw)
 
 
 def test_third_identical_failure_nudges(tmp_path):
@@ -134,3 +150,50 @@ def test_different_commands_tracked_independently(tmp_path):
 def test_malformed_stdin_fails_open(tmp_path):
     r = run_hook(tmp_path, "Bash", raw_stdin="not json")
     assert r.returncode == 0
+
+
+# ---- real Claude Code 2.1.x event model (PostToolUseFailure, no exit code) ----
+# THESIS: under the shipped event model a failing Bash command fires
+# PostToolUseFailure with no exit-code field, and the alarm must still trip on the
+# Nth failure. Before this fix the hook keyed on tool_response.exit_code — a field
+# 2.1.x never sends — so it was deterministically inert. These tests are the proof.
+
+def test_failure_event_without_exit_code_still_nudges(tmp_path):
+    assert fail_event(tmp_path, "pytest -q").returncode == 0
+    assert fail_event(tmp_path, "pytest -q").returncode == 0
+    r = fail_event(tmp_path, "pytest -q")
+    assert r.returncode == 2
+    assert "LOOP ALARM" in r.stderr
+
+
+def test_failing_write_command_accumulates(tmp_path):
+    # CONF0 regression: a failing command that redirects to a file (make test >
+    # build.log) used to be read as a legitimizing "file write" and cleared its own
+    # count every run, so it never tripped. On the failure event it must accumulate.
+    assert fail_event(tmp_path, "make test > build.log").returncode == 0
+    assert fail_event(tmp_path, "make test > build.log").returncode == 0
+    assert fail_event(tmp_path, "make test > build.log").returncode == 2
+
+
+def test_successful_postuse_event_resets_without_exit_code(tmp_path):
+    # A success now arrives as PostToolUse with no exit code; it must reset the count.
+    fail_event(tmp_path, "pytest -q")
+    fail_event(tmp_path, "pytest -q")
+    run_hook(tmp_path, "Bash", {"command": "pytest -q"}, {}, event="PostToolUse")
+    assert fail_event(tmp_path, "pytest -q").returncode == 0  # restarted at 1
+
+
+def test_successful_edit_event_resets_all_counts(tmp_path):
+    fail_event(tmp_path, "pytest -q")
+    fail_event(tmp_path, "pytest -q")
+    run_hook(tmp_path, "Edit", {"file_path": "x.py"}, {}, event="PostToolUse")
+    assert fail_event(tmp_path, "pytest -q").returncode == 0
+
+
+def test_bash_write_in_sync_with_claim_audit(tmp_path):
+    # CONF8/CONF67: the docstring claims the write heuristic is kept in sync with the
+    # claim-audit gate, but nothing enforced it. This is that guard.
+    alarm = _load("posttool-loop-alarm.py")
+    gate = _load("stop-claim-audit.py")
+    assert alarm.BASH_WRITE.pattern == gate.BASH_WRITE.pattern
+    assert alarm.MODIFYING_TOOLS == gate.MODIFYING_TOOLS

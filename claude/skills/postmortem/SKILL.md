@@ -36,7 +36,7 @@ lessons get banked while they're fresh. Run this at the end of hard work, not "l
 Memories are project-scoped by default. Promote one to the machine-wide global corpus
 (`~/.claude/memory/`) ONLY on an explicit decision, and record a one-line **why-global:**
 (the lesson generalizes past this repo). This rule is advisory; the deterministic gate is the
-`pretool-mem-privacy-guard.py` hook, which blocks a **Write/Edit/MultiEdit** into the global
+`pretool-mem-privacy-guard.py` hook, which blocks a **Write/Edit** into the global
 corpus whose content hits a work-marker pattern (`privacy.toml`) — so a leaked marker is
 stopped at write time. It matches those tools, not Bash/interpreter writes (`cat >>`,
 `python3 -c`); `mem doctor --privacy` is the backstop that sweeps what slipped through.

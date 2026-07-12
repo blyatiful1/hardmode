@@ -28,13 +28,21 @@ PROTOCOL = (
 
 
 def state_dir():
-    return os.environ.get("FABLE_STATE_DIR") or os.path.expanduser("~/.claude/tmp/fable-protocol")
+    return os.environ.get("FABLE_STATE_DIR") or os.path.join(
+        os.environ.get("CLAUDE_DIR") or os.path.expanduser("~/.claude"),
+        "tmp", "fable-protocol")
+
+
+# Total git budget must fit inside the hook's 10s timeout with headroom: two calls
+# at 3s each = 6s worst case, so a hung repo can never starve the flush below (CONF7).
+GIT_TIMEOUT = 3
 
 
 def run(cmd, cwd):
     """Returns (ok, stdout) — ok distinguishes 'clean output' from 'not a repo'."""
     try:
-        p = subprocess.run(cmd, cwd=cwd or None, capture_output=True, text=True, timeout=8)
+        p = subprocess.run(cmd, cwd=cwd or None, capture_output=True, text=True,
+                           timeout=GIT_TIMEOUT)
         return p.returncode == 0, p.stdout
     except Exception:
         return False, ""
@@ -57,6 +65,11 @@ def main():
     if task:
         print("\n--- original request (verbatim, saved pre-compaction) ---")
         print(task)
+
+    # Flush the two things a git hang must never lose (protocol + original request)
+    # BEFORE spending any of the budget on subprocesses. Under a hook, stdout is
+    # block-buffered, so a timeout-kill mid-git would otherwise discard everything.
+    sys.stdout.flush()
 
     cwd = data.get("cwd")
     ok, status = run(["git", "status", "--short"], cwd)

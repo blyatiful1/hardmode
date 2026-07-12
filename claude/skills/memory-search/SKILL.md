@@ -21,18 +21,20 @@ to re-derive from scratch may already be banked from another repo. Search first.
 - Routine edits where no cross-project lesson could change the answer.
 
 ## Commands
-Run against the installed CLI (BASE-resolved — honors `CLAUDE_DIR`). On Windows, invoke `python` wherever a command below says `python3`:
-- `python3 ~/.claude/cli/mem.py search "<keywords>"` — top hits (title + one-line description + path). Add `--json` for structured output, `--scope global` (or `project`) to isolate a scope.
-- `python3 ~/.claude/cli/mem.py show <id>` — read one memory's full body.
-- `python3 ~/.claude/cli/mem.py stats` — per-scope counts (sanity-check the corpus is indexed).
-- `python3 ~/.claude/cli/mem.py doctor` — FTS mode + corpus health if search behaves oddly.
+The CLI lives at `$CLAUDE_DIR/cli/mem.py` (default `~/.claude/cli/mem.py`) and resolves
+the corpus from `CLAUDE_DIR` — so under a custom `CLAUDE_DIR`, use that path, not the
+`~/.claude` literal shown here. On Windows, invoke `python` wherever a command says `python3`:
+- `python3 "${CLAUDE_DIR:-$HOME/.claude}/cli/mem.py" search "<keywords>"` — top hits (title + one-line description + path). Add `--json` for structured output, `--scope global` (or `project`) to isolate a scope.
+- `... mem.py show <id>` — read one memory's full body.
+- `... mem.py stats` — per-scope counts (sanity-check the corpus is indexed).
+- `... mem.py doctor` — FTS mode + corpus health if search behaves oddly.
 
 The UserPromptSubmit recall hook already surfaces the top few cross-project hits automatically; use these commands when you need to search deliberately, widen beyond the auto-surfaced 3, or read a full body.
 
 ## Banking and promotion
-To bank a lesson, use the **postmortem** skill — it writes the memory and decides scope.
-A memory stays project-local by default; promotion project→global happens ONLY on an explicit
-decision with a one-line why-global. The deterministic gate is `pretool-mem-privacy-guard.py`,
-which blocks a Write/Edit/MultiEdit into the corpus carrying a work-marker regardless of intent
-— so the common promotion path is prevention-by-hook. It does not see Bash/interpreter writes
-(`cat >>`, `python3 -c`); run `mem doctor --privacy` as the backstop before promoting.
+To bank a lesson or promote one project→global, use the **postmortem** skill — it is the
+single source of truth for the write mechanics and the privacy-guard boundary. Search here
+first (step above) to confirm the lesson isn't already banked before you promote. And run
+`mem doctor --privacy` as an explicit backstop before promoting/sharing: the write-time
+guard only covers `Write|Edit` and fails open, so an interpreter- or copy-based promotion
+(`cat >>`, `python3 -c`, `cp`) lands unscanned until the corpus sweep catches it.

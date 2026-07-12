@@ -104,6 +104,17 @@ def test_search_fts5_returns_the_matching_slug(tmp_path):
     assert "unrelated" not in slugs
 
 
+def test_fts_search_matches_short_tech_terms(tmp_path):
+    # A 2-char token like "go"/"ci" must still match in the common fts5 mode. unicode61
+    # token-matches (not substrings), so short tokens are safe there — the degraded LIKE
+    # path filters them only to avoid substring noise. Forcing the two to share the
+    # len>2 filter silently dropped every short-term query.
+    write_memory(global_dir(tmp_path), "golang.md", "Go language notes", "go build tips")
+    run(tmp_path, "index")
+    hits = json.loads(run(tmp_path, "search", "go", "--json").stdout)
+    assert any(h["slug"] == "golang" for h in hits), hits
+
+
 def test_search_scope_filter_excludes_project_hits(tmp_path):
     write_memory(global_dir(tmp_path), "g.md",
                  "Kafka consumer lag", "global note about kafka lag")
@@ -204,6 +215,16 @@ def test_doctor_privacy_blank_pattern_does_not_false_positive(tmp_path):
     assert "FOUND" not in r.stdout
 
 
+def test_doctor_privacy_warns_the_index_embeds_project_bodies(tmp_path):
+    # CONF49: mem-index.db in the shareable memory dir stores project-memory bodies
+    # verbatim; the privacy scan must warn about it rather than imply the dir is safe.
+    write_memory(project_dir(tmp_path, "repoA"), "note.md", "Note", "some project detail")
+    assert run(tmp_path, "index").returncode == 0  # creates mem-index.db under memory/
+    r = run(tmp_path, "doctor", "--privacy")
+    assert r.returncode == 0, r.stderr
+    assert "embeds project-memory bodies" in r.stdout
+
+
 def test_doctor_privacy_scans_the_ndjson_journal(tmp_path):
     # The SessionEnd journal (journal.ndjson) records cwd/branch verbatim into the
     # shared corpus dir; the detective sweep must see it, not only *.md.
@@ -277,6 +298,21 @@ def test_stats_recreates_a_corrupt_index(tmp_path):
     assert "Traceback" not in r.stderr
 
 
+def test_search_on_a_schemaless_index_returns_no_hits(tmp_path):
+    # CONF48: a 0-byte (or otherwise schema-less) index file is a VALID sqlite db
+    # with no `memories` table. search/show read that table directly and used to
+    # traceback; they must fail soft like any corrupt index instead.
+    write_memory(global_dir(tmp_path), "a.md", "Alpha", "retry backoff")
+    run(tmp_path, "index")
+    (global_dir(tmp_path) / "mem-index.db").write_bytes(b"")  # schema-less, not garbage
+    r = run(tmp_path, "search", "retry", "--json")
+    assert r.returncode == 0, r.stderr
+    assert json.loads(r.stdout) == []
+    assert "Traceback" not in r.stderr
+    # and it self-heals on rebuild
+    assert run(tmp_path, "index", "--rebuild").returncode == 0
+
+
 # ---------------------------------------------------------------------------
 # WAL + degraded escape hatch
 # ---------------------------------------------------------------------------
@@ -315,6 +351,33 @@ def test_gc_scan_flags_near_duplicate(tmp_path):
     assert r.returncode == 0, r.stderr
     report = json.loads(r.stdout)
     assert report["near_duplicates"], "expected a near-duplicate pair"
+
+
+def test_gc_scan_does_not_flag_memory_md_filename_collisions(tmp_path):
+    # CONF50: native per-project MEMORY.md files have no frontmatter `name:` and fall
+    # back to the basename "MEMORY". Matching on that fallback produced an N-choose-2
+    # explosion of bogus "identical name" pairs across unrelated projects. Only
+    # DECLARED names should collide.
+    for proj in ("repoA", "repoB", "repoC"):
+        d = project_dir(tmp_path, proj)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "MEMORY.md").write_text("no frontmatter here\njust notes\n", encoding="utf-8")
+    r = run(tmp_path, "gc-scan", "--json")
+    assert r.returncode == 0, r.stderr
+    report = json.loads(r.stdout)
+    name_pairs = [p for p in report["near_duplicates"] if p["reason"] == "identical name"]
+    assert name_pairs == [], f"filename-fallback names must not collide: {name_pairs}"
+
+
+def test_gc_scan_does_not_flag_bare_now_as_relative_date(tmp_path):
+    # CONF53: "now"/"recently" in ordinary prose ("we now use tabs") is not a relative
+    # date and must not trigger a rewrite proposal.
+    write_memory(global_dir(tmp_path), "prose.md", "Convention",
+                 "style", body="we now use tabs; this was recently agreed")
+    r = run(tmp_path, "gc-scan", "--json")
+    report = json.loads(r.stdout)
+    paths = [d["path"] for d in report["relative_dates"]]
+    assert not any("prose.md" in p for p in paths), report["relative_dates"]
 
 
 def test_gc_scan_flags_stale_project_memory(tmp_path):

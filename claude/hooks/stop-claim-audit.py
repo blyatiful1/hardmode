@@ -30,7 +30,7 @@ NEGATED = re.compile(
     r"(?:done|completed?|finished|verified|fixed|resolved|implemented)\b",
     re.IGNORECASE,
 )
-MODIFYING_TOOLS = {"Edit", "Write", "MultiEdit", "NotebookEdit"}
+MODIFYING_TOOLS = {"Edit", "Write", "NotebookEdit"}
 # Bash commands that plausibly write files: redirections (except to /dev/*),
 # in-place editors, file movers. Conservative — read-only sessions stay untaxed.
 BASH_WRITE = re.compile(
@@ -66,6 +66,14 @@ TEST_PATH = re.compile(
 )
 
 
+def is_test_path(p):
+    """TEST_PATH match with backslash paths normalized to forward slashes, so the
+    directory/pytest heuristics fire on native-Windows file_path values (C:\\r\\tests\\
+    test_x.py) that the Edit/Write tools emit — otherwise the gate's test-edit
+    detection is silently inert on Windows (CONF1)."""
+    return bool(TEST_PATH.search(p.replace("\\", "/"))) if isinstance(p, str) else False
+
+
 def makes_claim(text):
     return bool(CLAIM.search(NEGATED.sub("", text)))
 
@@ -79,7 +87,7 @@ def bash_touches_tests(cmd):
     > out.log`) does not count — only tokens naming something inside one.
     """
     for token in re.split(r"[\s;|&<>()]+", cmd):
-        token = token.strip("'\"`")
+        token = token.strip("'\"`").replace("\\", "/")
         if not token or re.fullmatch(r"\.?/?(tests?|__tests__|spec)/?", token, re.IGNORECASE):
             continue
         if TEST_PATH.search(token):
@@ -117,7 +125,7 @@ def main():
                         modified = True
                         inp = block.get("input")
                         fp = inp.get("file_path", "") if isinstance(inp, dict) else ""
-                        if isinstance(fp, str) and TEST_PATH.search(fp):
+                        if is_test_path(fp):
                             modified_tests = True
                     elif name == "Bash":
                         inp = block.get("input")

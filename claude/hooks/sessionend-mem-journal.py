@@ -142,14 +142,15 @@ def write_journal(base, data):
 
 def reindex(base):
     """Incremental `mem.py index` side effect — best-effort, hard-timeout-bounded.
-    Env is propagated so CLAUDE_DIR reaches the subprocess and it indexes THIS base."""
+    Pins CLAUDE_DIR=base so the subprocess indexes the SAME corpus this hook resolved,
+    even if the caller passed a base that differs from the ambient CLAUDE_DIR."""
     mem_py = os.path.join(base, "cli", "mem.py")
     if not os.path.exists(mem_py):
         return
     try:
         subprocess.run(
             [sys.executable, mem_py, "index"],
-            env=os.environ.copy(),
+            env=dict(os.environ, CLAUDE_DIR=base),
             capture_output=True, text=True, timeout=REINDEX_TIMEOUT,
         )
     except Exception:

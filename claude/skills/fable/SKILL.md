@@ -40,11 +40,15 @@ stages because you feel confident — feeling confident is not evidence.
 - Re-read the original request one last time and check the task list: every deliverable shipped?
 - Non-obvious lessons (surprising root cause, dead-end approach, environment quirk) → postmortem skill → auto-memory.
 
-## If the Workflow tool is unavailable
-The /deep-plan and /paranoid-review stages assume saved workflows. Your invoking this
-skill authorizes those runs; but if the Workflow tool is genuinely unavailable in the
-session, do the same stage with Agent-tool subagents (3 refuters / plan critic /
+## Workflow stages honor the orchestration gate
+The /deep-plan and /paranoid-review stages use the Workflow tool, which is the user's
+money — so they run ONLY when the session is opted in (the user typed "ultracode", the
+user invoked /fable or another slash command that explicitly instructs Workflow/
+orchestration use, or the user asked for orchestration in their own words).
+When this skill fired on its own auto-trigger, or the Workflow tool is otherwise
+unavailable, do the SAME stage with Agent-tool subagents (3 refuters / plan critic /
 per-dimension reviewers spawned directly) — degrade the machinery, never the rigor.
+Invoking a skill does not by itself authorize Workflow runs.
 
 ## Cost honesty
 This protocol multiplies agent spend. That is the point — but say what it cost when

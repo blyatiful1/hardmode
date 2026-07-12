@@ -80,9 +80,12 @@ adversarial review of the kit itself. Sources inline.
   produced 15 findings; all should-fixes applied (trigger partitions between overlapping
   verification paths, three-way verdicts instead of silent drops, observable loop triggers,
   effort floor, deterministic compact hook).
-- Every component live-verified on `claude-opus-4-8` (Claude Code 2.1.198, 2026-07-02):
-  doctrine quoted verbatim from a fresh session, all agents visible and spawnable
-  (incl. `effort: max` frontmatter), all workflow commands registered.
+- Every **v1.0/v1.1** component live-verified on `claude-opus-4-8` (Claude Code 2.1.198,
+  2026-07-02): doctrine quoted verbatim from a fresh session, all agents visible and
+  spawnable (incl. `effort: max` frontmatter), all workflow commands registered.
+  Components added later (v1.2+ hooks, doctor, small-tier, `/big-task`, fable-mem, the
+  Windows port) are unit- and CI-tested but have NOT all had a live-session pass — see
+  the README's Known limits for the current live-verification scope.
 - Honest residual: `CLAUDE_CODE_MAX_OUTPUT_TOKENS` effectiveness unverified (has a
   documented history of being ignored on some versions: [#24159](https://github.com/anthropics/claude-code/issues/24159));
   kept because it is clamped per-model and therefore harmless.

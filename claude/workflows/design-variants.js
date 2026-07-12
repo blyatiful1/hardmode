@@ -13,12 +13,16 @@ export const meta = {
 const brief = (typeof args === 'string' && args.trim()) ? args.trim() : null
 if (!brief) return { error: 'Usage: /design-variants <design brief — audience, purpose, market, any fixed constraints>' }
 
-// German-market mode: adds a compliance judge and puts the german-market checklist
-// in every builder's brief. Cheap heuristic on the brief text — explicit market
-// keywords OR German-language signals (umlauts/ß, „quotes", GmbH, common function
-// words), since a brief WRITTEN in German is the strongest signal of all. When in
-// doubt, say "German market" in the brief.
-const german = /german|deutsch|germany|dach\b|\.de\b|impressum|dsgvo|[äöüß„]|\bGmbH\b|\bund\b|\beine[nrms]?\b/i.test(brief)
+// German-market mode: adds a compliance judge and puts the german-market checklist in
+// every builder's brief. The gate is legally load-bearing, so it errs toward ON: an
+// explicit market keyword OR a STRONG single signal (GmbH / Impressum / AGB — each
+// unambiguously German-market) turns it on outright. WEAK signals (a lone umlaut, „,
+// "und"/"eine") could be an English brief naming "Motörhead" or "Zürich" (CONF26), so
+// those require two before triggering. When in doubt, say "German market".
+const germanKeyword = /german|deutsch|germany|dach\b|\.de\b|impressum|dsgvo|\bGmbH\b|\bAGB\b|\bBFSG\b|\bTTDSG\b|\bTDDDG\b/i.test(brief)
+const weakSignals = [/[äöüß]/, /„/, /\bund\b/i, /\beine[nrms]?\b/i].filter(re => re.test(brief)).length
+const german = germanKeyword || weakSignals >= 2
+if (german && !germanKeyword) log(`german-market mode enabled by ${weakSignals} weak language signals — name the market explicitly to be sure`)
 
 const SKILL_HINT = `If the installed webdesign skill references exist — default location ~/.claude/skills/webdesign/references/, or under $CLAUDE_DIR/skills/webdesign/references/ when that env var is set — read design-views.md${german ? ' AND german-market.md' : ''} from there FIRST and follow them; if absent, proceed from the constraints in this prompt alone.`
 

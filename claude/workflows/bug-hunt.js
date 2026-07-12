@@ -64,8 +64,9 @@ const unverified = []
 const key = b => `${b.file}:${(b.title || '').toLowerCase().slice(0, 60)}`
 
 let dry = 0
+let stoppedForBudget = false
 for (let round = 0; round < MAX_ROUNDS && dry < 2; round++) {
-  if (budget.total && budget.remaining() < 40_000) { log('token budget nearly spent — stopping early'); break }
+  if (budget.total && budget.remaining() < 40_000) { log('token budget nearly spent — stopping early'); stoppedForBudget = true; break }
   phase('Hunt')
   const roundLenses = Array.from({ length: LENSES_PER_ROUND },
     (_, i) => LENSES[(round * LENSES_PER_ROUND + i) % LENSES.length])
@@ -106,7 +107,10 @@ verdict=confirmed only if the code demonstrably has this defect; refuted if it i
   })
 }
 
-if (dry < 2) log(`round cap (${MAX_ROUNDS}) reached while the hunt was still surfacing new findings — coverage is NOT exhaustive`)
+// Distinguish WHY the hunt stopped: only claim the round cap when it was actually
+// reached, not when we broke out early on budget (CONF17).
+if (stoppedForBudget) log('hunt stopped early on token budget before exhaustion — coverage is NOT exhaustive')
+else if (dry < 2) log(`round cap (${MAX_ROUNDS}) reached while the hunt was still surfacing new findings — coverage is NOT exhaustive`)
 const SEVERITY_RANK = { critical: 0, major: 1, minor: 2 }
 const bySeverity = (a, b) => (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3)
 log(`done: ${confirmed.length} confirmed, ${refuted.length} refuted, ${unverified.length} unverified (${seen.size} total found)`)

@@ -74,7 +74,13 @@ Report EVERY real issue you find regardless of severity — a separate verificat
   (r, [key]) => {
     // A dead finder must be visible, not read as "dimension found nothing clean".
     if (r == null) { log(`find:${key}: FINDER DIED — this dimension is UNREVIEWED`); return [] }
-    if (budget.total && budget.remaining() < 30_000) { log(`find:${key}: token budget nearly spent — findings reported UNVERIFIED`); return (r.findings ?? []).map(f => ({ ...f, dimension: key, verdict: null })) }
+    if (budget.total && budget.remaining() < 30_000) {
+      // Still dedup on the budget path, or the same defect surfaces twice — once
+      // confirmed by an earlier dimension, once unverified here (CONF20).
+      log(`find:${key}: token budget nearly spent — findings reported UNVERIFIED`)
+      return (r.findings ?? []).filter(f => !seen.has(dedupKey(f)) && seen.add(dedupKey(f)))
+        .map(f => ({ ...f, dimension: key, verdict: null }))
+    }
     const fresh = (r?.findings ?? []).filter(f => !seen.has(dedupKey(f)) && seen.add(dedupKey(f)))
     const dupes = (r?.findings?.length ?? 0) - fresh.length
     if (dupes) log(`find:${key}: ${dupes} duplicate finding(s) already claimed by another dimension`)

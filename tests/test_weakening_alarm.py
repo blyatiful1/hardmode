@@ -98,15 +98,16 @@ def test_write_of_new_test_file_with_skip_alarms(tmp_path):
     assert r.returncode == 2
 
 
-def test_multiedit_with_one_weakening_edit_alarms(tmp_path):
-    r = run_hook(tmp_path, "MultiEdit", {
-        "file_path": "tests/test_multi.py",
-        "edits": [
-            {"old_string": "a = 1", "new_string": "a = 2"},
-            {"old_string": "def test_y():", "new_string": "@unittest.skip('later')\ndef test_y():"},
-        ],
-    })
+def test_windows_backslash_test_path_alarms(tmp_path):
+    # CONF1: native-Windows Edit/Write payloads carry backslash file_paths. Without
+    # separator normalization the tests/ and test_*.py heuristics never fire on
+    # Windows — the alarm would be silently inert on a supported platform.
+    r = edit(tmp_path, r"C:\repo\tests\test_foo.py",
+             "def test_x():", "@pytest.mark.skip\ndef test_x():")
     assert r.returncode == 2
+    r2 = edit(tmp_path, r"src\tests\test_bar.py",
+              "def test_y():", "@unittest.skip('later')\ndef test_y():", session="s2")
+    assert r2.returncode == 2
 
 
 def test_bash_tool_ignored(tmp_path):

@@ -43,6 +43,9 @@ def test_checkout_discard_blocked_on_dirty_tree(tmp_path):
     repo = make_repo(tmp_path, dirty=True)
     assert run_hook("git checkout -- .", cwd=repo).returncode == 2
     assert run_hook("git checkout .", cwd=repo).returncode == 2
+    # CONF4: `git checkout ./` and `git checkout ..` are the same tree-destroyer.
+    assert run_hook("git checkout ./", cwd=repo).returncode == 2
+    assert run_hook("git checkout ..", cwd=repo).returncode == 2
 
 
 def test_checkout_branch_allowed(tmp_path):
@@ -76,6 +79,18 @@ def test_force_push_blocked_lease_allowed(tmp_path):
     assert run_hook("git push -f origin main", cwd=repo).returncode == 2
     assert run_hook("git push --force-with-lease origin main", cwd=repo).returncode == 0
     assert run_hook("git push -u origin main", cwd=repo).returncode == 0
+
+
+def test_force_with_lease_elsewhere_does_not_excuse_bare_force(tmp_path):
+    # CONF3: --force-with-lease in a DIFFERENT segment (a chained safe push, an echo)
+    # must not suppress the block on a bare --force in its own segment.
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook(
+        'git push --force origin main && echo "prefer --force-with-lease next time"',
+        cwd=repo).returncode == 2
+    assert run_hook(
+        "git push --force-with-lease origin a && git push --force origin b",
+        cwd=repo).returncode == 2
 
 
 def test_plus_refspec_force_push_blocked(tmp_path):
@@ -126,6 +141,64 @@ def test_quoted_rm_target_still_blocked():
 def test_override_token_allows(tmp_path):
     repo = make_repo(tmp_path, dirty=True)
     assert run_hook("FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+    # Also valid as a segment-leading assignment after a separator.
+    assert run_hook("cd repo; FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+
+
+def test_override_only_as_assignment_not_mere_mention(tmp_path):
+    # CONF5: the override string inside a quoted commit message (or any non-assignment
+    # position) must NOT disable the guard for the rest of the command.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook(
+        'git commit -m "set FABLE_DESTRUCTIVE_OK=1 to bypass" && git reset --hard',
+        cwd=repo).returncode == 2
+
+
+def test_override_is_scoped_to_its_own_segment(tmp_path):
+    # The override is a shell env-assignment prefix — it approves only the command it
+    # prefixes. A later, UNAPPROVED destructive segment must still be blocked.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook(
+        "FABLE_DESTRUCTIVE_OK=1 git reset --hard; rm -rf /", cwd=repo).returncode == 2
+    assert run_hook(
+        "FABLE_DESTRUCTIVE_OK=1 git reset --hard && git clean -fd", cwd=repo).returncode == 2
+    # A bare NEWLINE is a command separator too — the override must not leak across it.
+    assert run_hook(
+        "FABLE_DESTRUCTIVE_OK=1 git reset --hard\nrm -rf /", cwd=repo).returncode == 2
+    # ...but the approved segment alone still passes.
+    assert run_hook("FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+
+
+def test_command_substitution_in_double_quotes_is_inspected(tmp_path):
+    # A destructive command hidden in "$(...)" or `...` still executes — the guard must
+    # see through the surrounding double quotes.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook('echo "$(git reset --hard)"', cwd=repo).returncode == 2
+    assert run_hook("echo `git clean -fd`", cwd=repo).returncode == 2
+    # A separator INSIDE the substitution must not split it away from the scan.
+    assert run_hook("echo $(true; rm -rf /)", cwd=repo).returncode == 2
+
+
+def test_single_quoted_substitution_is_literal_not_executed(tmp_path):
+    # Single quotes suppress command substitution, so '$(...)' is a literal string and
+    # must NOT be treated as a hidden command (no false block).
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook("echo '$(git reset --hard)'", cwd=repo).returncode == 0
+
+
+def test_braced_home_expansion_is_a_catastrophic_rm_target(tmp_path):
+    # rm -rf "${HOME}" expands to the home dir exactly like $HOME — both must block.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook('rm -rf "${HOME}"', cwd=repo).returncode == 2
+    assert run_hook("rm -rf ${HOME}", cwd=repo).returncode == 2
+
+
+def test_rm_phrase_in_commit_message_does_not_false_trip(tmp_path):
+    # A commit message that merely MENTIONS `rm -rf /` is not an rm command; only a
+    # genuine (even quoted) target should block.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook('git commit -m "note: never run rm -rf / here"', cwd=repo).returncode == 0
+    assert run_hook('rm -rf "/"', cwd=repo).returncode == 2
 
 
 def test_non_git_cwd_fails_open(tmp_path):

@@ -22,10 +22,6 @@ def wired_commands(snippet):
     return cmds
 
 
-def test_snippet_is_valid_json():
-    load_snippet()
-
-
 def test_every_shipped_hook_is_wired():
     commands = " ".join(c for _, _, c in wired_commands(load_snippet()))
     for f in sorted(HOOKS_DIR.glob("*.py")):
@@ -39,19 +35,39 @@ def test_every_wired_hook_ships():
 
 
 def test_hooks_are_wired_to_the_right_events():
+    # Each hook -> the SET of events it is wired to. The loop alarm needs BOTH
+    # PostToolUse (to observe the successes that reset the grind counter) and
+    # PostToolUseFailure (the only event that carries a Bash failure in 2.1.x).
     expected = {
-        "stop-claim-audit.py": "Stop",
-        "posttool-loop-alarm.py": "PostToolUse",
-        "posttool-test-weakening-alarm.py": "PostToolUse",
-        "pretool-destructive-guard.py": "PreToolUse",
-        "precompact-save-task.py": "PreCompact",
-        "sessionstart-compact-recovery.py": "SessionStart",
-        "userpromptsubmit-mem-recall.py": "UserPromptSubmit",
-        "sessionend-mem-journal.py": "SessionEnd",
-        "pretool-mem-privacy-guard.py": "PreToolUse",
+        "stop-claim-audit.py": {"Stop"},
+        "posttool-loop-alarm.py": {"PostToolUse", "PostToolUseFailure"},
+        "posttool-test-weakening-alarm.py": {"PostToolUse"},
+        "pretool-destructive-guard.py": {"PreToolUse"},
+        "precompact-save-task.py": {"PreCompact"},
+        "sessionstart-compact-recovery.py": {"SessionStart"},
+        "userpromptsubmit-mem-recall.py": {"UserPromptSubmit"},
+        "sessionend-mem-journal.py": {"SessionEnd"},
+        "pretool-mem-privacy-guard.py": {"PreToolUse"},
     }
-    actual = {c.split("/")[-1]: e for e, _, c in wired_commands(load_snippet())}
+    actual = {}
+    for e, _, c in wired_commands(load_snippet()):
+        actual.setdefault(c.split("/")[-1], set()).add(e)
     assert actual == expected
+
+
+def test_load_bearing_matchers_are_pinned():
+    # Matchers are load-bearing, not cosmetic: SessionStart must scope to 'compact'
+    # (a bare match would fire on every session start), the destructive guard and the
+    # failure-side loop alarm must scope to Bash, and the recovery hooks must not.
+    by = {}
+    for event, matcher, cmd in wired_commands(load_snippet()):
+        by[(event, cmd.split("/")[-1])] = matcher
+    assert by[("SessionStart", "sessionstart-compact-recovery.py")] == "compact"
+    assert by[("PreToolUse", "pretool-destructive-guard.py")] == "Bash"
+    assert by[("PostToolUseFailure", "posttool-loop-alarm.py")] == "Bash"
+    # MultiEdit was removed from Claude Code 2.1.x — no matcher should still name it.
+    for matcher in by.values():
+        assert "MultiEdit" not in matcher
 
 
 def test_weakening_alarm_matcher_covers_edit_tools_only():
@@ -59,7 +75,7 @@ def test_weakening_alarm_matcher_covers_edit_tools_only():
     # Bash matcher would burn a hook invocation on every command for nothing.
     for _, matcher, cmd in wired_commands(load_snippet()):
         if "test-weakening" in cmd:
-            for tool in ("Edit", "Write", "MultiEdit"):
+            for tool in ("Edit", "Write"):
                 assert tool in matcher
             assert "Bash" not in matcher
 

@@ -54,6 +54,23 @@ function Invoke-Python($Py, [string[]]$PyArgs) {
 
 Write-Host "fable-protocol doctor — checking $Dst"
 
+# 0. Claude Code version — saved workflows (/paranoid-review etc.) need >= 2.1.154.
+$claude = Get-Command claude -ErrorAction SilentlyContinue
+if ($claude) {
+    $cver = ''
+    try { if ((& claude --version 2>$null | Out-String) -match '(\d+\.\d+\.\d+)') { $cver = $Matches[1] } } catch {}
+    if ($cver) {
+        $need = [version]'2.1.154'
+        if ([version]$cver -lt $need) {
+            Warn "Claude Code $cver detected; saved workflows need >= 2.1.154 (everything else still works)"
+        } else {
+            Ok "Claude Code $cver (>= 2.1.154)"
+        }
+    }
+} else {
+    Warn "'claude' not on PATH — could not verify Claude Code >= 2.1.154"
+}
+
 # 1. Python — every hook runs through it. The Windows snippets invoke `python`.
 $py = Get-PythonCommand
 if ($py) {

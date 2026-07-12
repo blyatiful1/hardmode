@@ -15,15 +15,26 @@ if (!raw) return { error: 'Usage: /big-task <task description> [--verify-model=o
 
 let verifyModel = null
 let maxSteps = 10
+let badFlag = null
 const task = raw
   .replace(/--verify-model=(\S+)/, (_, m) => { verifyModel = m; return '' })
-  .replace(/--max-steps=(\d+)/, (_, n) => { maxSteps = Math.max(1, Math.min(20, +n)); return '' })
+  .replace(/--max-steps=(\S+)/, (_, n) => {
+    const v = /^\d+$/.test(n) ? +n : NaN
+    if (!Number.isFinite(v) || v < 1) badFlag = `--max-steps needs a positive integer, got "${n}"`
+    else maxSteps = Math.min(20, v)
+    return ''
+  })
   .trim()
+if (badFlag) return { error: `${badFlag}. Usage: /big-task <task description> [--verify-model=opus] [--max-steps=N]` }
 if (!task) return { error: 'No task text left after flags. Usage: /big-task <task description> [--verify-model=opus] [--max-steps=N]' }
 
-// Draft cheap, verify strong: verifiers always run at xhigh effort, and are pinned
-// to a stronger model when the caller has one to give (--verify-model=opus).
+// Draft cheap, verify strong: the VERIFICATION roles (plan-critic, per-step verifier,
+// completeness critic) run at xhigh and are pinned to the stronger model when the
+// caller gives one. The PLANNERS (decompose + repair) are drafters: xhigh effort, but
+// never the verify-model pin — otherwise --verify-model would silently upgrade planning
+// too, contradicting the flag's meaning and the draft-cheap/verify-strong doctrine.
 const strong = { effort: 'xhigh', ...(verifyModel ? { model: verifyModel } : {}) }
+const planEffort = { effort: 'xhigh' }
 
 const PLAN = {
   type: 'object',
@@ -74,7 +85,7 @@ Explore the actual codebase first; verify assumptions rather than guessing. Then
 - committable: the repo is in a coherent, green state after it (no step may leave the build broken for a later step to fix);
 - small: a step a careful junior engineer could execute without asking questions.
 Also identify the project's canonical full check (test suite, build, verify script). If the task is genuinely one or two steps, return exactly those — do not pad.`
-let plan = await agent(planPrompt, { label: 'decompose', phase: 'Decompose', schema: PLAN, ...strong })
+let plan = await agent(planPrompt, { label: 'decompose', phase: 'Decompose', schema: PLAN, ...planEffort })
 if (!plan || !plan.steps?.length) return { error: 'Decomposition failed — no plan produced' }
 
 const planText = p => p.steps.map((s, i) => `${i + 1}. ${s.goal}\n   ${s.detail}\n   check: ${s.check}`).join('\n')
@@ -97,7 +108,7 @@ A critic found these problems in a previous decomposition attempt — your plan 
 ${critique.problems.map(p => '- ' + p).join('\n')}
 Previous plan for reference:
 ${planText(plan)}`,
-    { label: 'decompose:v2', phase: 'Decompose', schema: PLAN, ...strong }
+    { label: 'decompose:v2', phase: 'Decompose', schema: PLAN, ...planEffort }
   )
   if (repaired?.steps?.length) plan = repaired
   else log('repair planner failed — proceeding with the original plan plus the critique as a known risk')
@@ -106,7 +117,6 @@ log(`${plan.steps.length} step(s); canonical check: ${plan.canonicalCheck}`)
 
 // ---- Execute: implement -> verify -> (repair -> re-verify) -> commit, per step ----
 const done = []
-const commits = []
 let halted = null
 
 for (let i = 0; i < plan.steps.length; i++) {
@@ -148,9 +158,15 @@ verdict=pass ONLY if both checks pass under your own execution AND the diff genu
     const repair = await agent(implPrompt(problems), { label: `repair:${i + 1}`, phase: 'Execute' })
     v = repair == null ? null : await verify()
     if (v?.verdict !== 'pass') {
-      // Two rejected attempts: stop grinding (doctrine). Leave the dirty tree for the caller.
-      halted = { step: i + 1, goal: step.goal, reason: 'step failed adversarial verification twice', problems: v?.problems ?? problems, evidence: v?.evidence ?? null }
-      log(`step ${n} failed twice — halting. Completed checkpoints remain committed; the failed attempt is uncommitted in the working tree.`)
+      // Stop grinding (doctrine). Leave the dirty tree for the caller. Distinguish
+      // "the repair implementer died" (second verification never ran) from a genuine
+      // second verification failure — the halt reason must not claim a check that
+      // never executed (CONF15).
+      const reason = repair == null
+        ? 'repair implementer died after one rejected verification'
+        : 'step failed adversarial verification twice'
+      halted = { step: i + 1, goal: step.goal, reason, problems: v?.problems ?? problems, evidence: v?.evidence ?? null }
+      log(`step ${n} halting (${reason}). Completed checkpoints remain committed; the failed attempt is uncommitted in the working tree.`)
       break
     }
   }
@@ -164,7 +180,6 @@ Return the commit hash, or the exact error if the commit fails (nothing staged c
     { label: `commit:${i + 1}`, phase: 'Execute', effort: 'low' }
   )
   done.push({ step: i + 1, goal: step.goal, evidence: v.evidence, commit: commit ?? 'COMMIT AGENT DIED — checkpoint may be uncommitted, check git log' })
-  commits.push(commit)
   log(`step ${n} verified and committed`)
 }
 
