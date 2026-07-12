@@ -36,16 +36,28 @@ OVERRIDE_SEGMENT = re.compile(r"^\s*(?:[A-Za-z_]\w*=\S*\s+)*FABLE_DESTRUCTIVE_OK
 
 
 _QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
-# Command substitutions execute regardless of the surrounding double quotes, so a
-# destructive command hidden in "$(...)" or `...` must stay visible to the checks.
+_SINGLE = re.compile(r"'[^']*'")
+# Command substitutions execute inside double quotes and unquoted, but NOT inside single
+# quotes (there they are literal). A destructive command hidden in "$(...)" or `...` must
+# stay visible to the checks; one in '$(...)' must not false-trip. Single level of nesting.
 _SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
+
+
+def _blank(s):
+    return " " * len(s)
 
 
 def _blank_quotes(s):
     """Length-preserving: replace each quoted span with same-length spaces, so a commit
     message or echo that merely MENTIONS `reset --hard` can't trip the git checks while
     offsets stay aligned with the raw command."""
-    return _QUOTED.sub(lambda m: " " * len(m.group()), s)
+    return _QUOTED.sub(lambda m: _blank(m.group()), s)
+
+
+def _blank_single_quotes(s):
+    """Length-preserving blanking of SINGLE-quoted spans only — the view in which command
+    substitutions are actually active (single quotes suppress them)."""
+    return _SINGLE.sub(lambda m: _blank(m.group()), s)
 
 
 def _rm_view(s):
@@ -62,9 +74,10 @@ def _rm_view(s):
     return _QUOTED.sub(repl, s)
 
 
-def _subst_contents(raw_segment):
-    """Contents of `$(...)` / backtick command substitutions in a segment (one level)."""
-    return [a or b for a, b in _SUBST.findall(raw_segment)]
+def _subst_contents(segment):
+    """Contents of ACTIVE `$(...)` / backtick command substitutions in a segment (one
+    nesting level). Pass a single-quote-blanked slice so literal '$(...)' is ignored."""
+    return [a or b for a, b in _SUBST.findall(segment)]
 
 
 def _segments(s):
@@ -102,7 +115,7 @@ ALWAYS_DANGEROUS = [
     # deletes without prompting in non-interactive shells) aimed at a catastrophic
     # first target: / /* ~ ~/ $HOME . ./ .. ../ *
     (re.compile(r"\brm\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[rR][a-zA-Z]*(?:\s+-\S+)*"
-                r"\s+(?:\"|')?(?:/(?:\*)?|~(?:/)?|\$HOME(?:/)?|\.\.?(?:/)?|\*)(?:\"|')?(?:\s|$|;)"),
+                r"\s+(?:\"|')?(?:/(?:\*)?|~(?:/)?|\$\{?HOME\}?(?:/)?|\.\.?(?:/)?|\*)(?:\"|')?(?:\s|$|;)"),
      "recursive rm aimed at /, ~, ., .. or * is unrecoverable", True),
 ]
 # --force / -f, plus the refspec spelling of force (`git push origin +main`) —
@@ -133,6 +146,27 @@ def block(reason):
     return 2
 
 
+def _iter_command_slices(text, depth=0):
+    """Yield (useg, rmseg) for each command in `text`: top-level segments split on shell
+    separators, and — one nesting level deep — the commands inside each ACTIVE command
+    substitution (`"$(...)"` / backticks / unquoted `$(...)`; single-quoted ones are
+    literal and skipped). `useg` is the quote-stripped view (for git/force/tree patterns),
+    `rmseg` the rm-target view (genuine quoted targets kept). An override-approved
+    top-level segment — and everything inside it — is skipped. Recursion is bounded."""
+    qb = _blank_quotes(text)
+    rmv = _rm_view(text)
+    sq = _blank_single_quotes(text)          # view where substitutions are ACTIVE
+    seg_view = _SUBST.sub(lambda m: _blank(m.group()), qb)  # blank substs so inner ; don't split
+    for s, e in _segments(seg_view):
+        useg = seg_view[s:e]
+        if OVERRIDE_SEGMENT.search(useg):
+            continue                          # user explicitly approved THIS command
+        yield useg, rmv[s:e]
+        if depth < 3:
+            for content in _subst_contents(sq[s:e]):
+                yield from _iter_command_slices(content, depth + 1)
+
+
 def main():
     data = json.load(sys.stdin)
     if data.get("tool_name") != "Bash":
@@ -147,46 +181,32 @@ def main():
     # next — see _segments).
     cmd = re.sub(r"\\\r?\n", " ", cmd).replace("\r\n", "\n").replace("\r", "\n")
     flat = re.sub(r"[^\S\n]+", " ", cmd).strip()
-    # Length-aligned views: `blanked` quote-strips (so a MENTION of `reset --hard` in a
-    # message can't trip), `rm_view` keeps genuine quoted rm targets, both 1:1 with flat.
-    blanked = _blank_quotes(flat)
-    rm_view = _rm_view(flat)
 
-    # Evaluate EVERY check per shell segment. The override is a shell env-assignment
-    # prefix: it applies ONLY to the command it prefixes, so it exempts only its own
-    # segment — `FABLE_DESTRUCTIVE_OK=1 git reset --hard; rm -rf /` still blocks the rm.
-    # Command substitutions ("$(...)"/backticks) execute regardless of quoting, so their
-    # contents are scanned too — a destructive command can't hide inside one.
+    # The override is a shell env-assignment prefix: it applies ONLY to the command it
+    # prefixes, so it exempts only its own segment. Unconditional blocks (rm at a
+    # catastrophic target, stash drop, force-push) fire immediately; tree-destroyers block
+    # only when the working tree is dirty, so they are collected and checked once at the end.
     tree_reason = None
-    for s, e in _segments(blanked):
-        useg = blanked[s:e]
-        rmseg = rm_view[s:e]
-        if OVERRIDE_SEGMENT.search(useg):
-            continue  # user explicitly approved THIS command; leave the rest guarded
-        subs = _subst_contents(flat[s:e])
-        git_probes = [useg] + subs      # git/tree/force patterns
+    for useg, rmseg in _iter_command_slices(flat):
         for pat, why, raw_targets in ALWAYS_DANGEROUS:
-            hays = ([rmseg] + subs) if raw_targets else git_probes
-            if any(pat.search(h) for h in hays):
+            if pat.search(rmseg if raw_targets else useg):
                 return block(why)
-        if any(FORCE_PUSH.search(h) and not FORCE_WITH_LEASE.search(h) for h in git_probes):
+        if FORCE_PUSH.search(useg) and not FORCE_WITH_LEASE.search(useg):
             return block("bare force-push can destroy remote history; use --force-with-lease, "
                          "and only with user approval")
         if tree_reason is None:
             for pat, why in TREE_DESTROYERS:
-                if any(pat.search(h) for h in git_probes):
+                if pat.search(useg):
                     tree_reason = why
                     break
         if tree_reason is None:
-            for h in git_probes:
-                m = RESTORE.search(h)
-                if m:
-                    args = m.group(1)
-                    # `git restore --staged <path>` only unstages — safe. Anything that
-                    # touches the worktree discards local edits.
-                    if "--staged" not in args or "--worktree" in args or re.search(r"\s-W\b", args):
-                        tree_reason = "git restore discards uncommitted modifications to the given paths"
-                        break
+            m = RESTORE.search(useg)
+            if m:
+                args = m.group(1)
+                # `git restore --staged <path>` only unstages — safe. Anything that
+                # touches the worktree discards local edits.
+                if "--staged" not in args or "--worktree" in args or re.search(r"\s-W\b", args):
+                    tree_reason = "git restore discards uncommitted modifications to the given paths"
     if tree_reason:
         n = dirty_paths(data.get("cwd"))
         if n:

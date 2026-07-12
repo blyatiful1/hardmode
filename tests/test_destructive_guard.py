@@ -175,6 +175,22 @@ def test_command_substitution_in_double_quotes_is_inspected(tmp_path):
     repo = make_repo(tmp_path, dirty=True)
     assert run_hook('echo "$(git reset --hard)"', cwd=repo).returncode == 2
     assert run_hook("echo `git clean -fd`", cwd=repo).returncode == 2
+    # A separator INSIDE the substitution must not split it away from the scan.
+    assert run_hook("echo $(true; rm -rf /)", cwd=repo).returncode == 2
+
+
+def test_single_quoted_substitution_is_literal_not_executed(tmp_path):
+    # Single quotes suppress command substitution, so '$(...)' is a literal string and
+    # must NOT be treated as a hidden command (no false block).
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook("echo '$(git reset --hard)'", cwd=repo).returncode == 0
+
+
+def test_braced_home_expansion_is_a_catastrophic_rm_target(tmp_path):
+    # rm -rf "${HOME}" expands to the home dir exactly like $HOME — both must block.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook('rm -rf "${HOME}"', cwd=repo).returncode == 2
+    assert run_hook("rm -rf ${HOME}", cwd=repo).returncode == 2
 
 
 def test_rm_phrase_in_commit_message_does_not_false_trip(tmp_path):
