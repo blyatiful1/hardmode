@@ -35,6 +35,37 @@ function metaLiteral(src) {
 // non-deterministic and break the resume-from-cache contract (CONF24).
 const FORBIDDEN = /\bDate\.now\s*\(|\bMath\.random\s*\(|\bnew Date\s*\(\s*\)/
 
+// Blank out string-literal and comment CONTENT before the determinism scan, so a prompt
+// that merely MENTIONS Date.now()/Math.random() (e.g. instructing a subagent to hunt for
+// that anti-pattern) does not false-fail — while real code, INCLUDING code inside
+// template `${...}` interpolations, is still scanned (CONF25). Meta checks above keep
+// running on the raw source; only this scan needs the stripped view.
+function stripStringsAndComments(src) {
+  let out = ''
+  const stack = [] // {type:'template'} | {type:'interp', depth}
+  for (let i = 0; i < src.length; i++) {
+    const c = src[i], c2 = src[i + 1]
+    const top = stack[stack.length - 1]
+    if (top && top.type === 'template') {
+      if (c === '\\') { i++; continue }        // escape: skip next char
+      if (c === '`') { stack.pop(); continue } // end of template literal
+      if (c === '$' && c2 === '{') { stack.push({ type: 'interp', depth: 0 }); i++; continue }
+      continue                                 // drop template text
+    }
+    // code context (top level or inside a ${...} interpolation)
+    if (c === '/' && c2 === '/') { while (i < src.length && src[i] !== '\n') i++; continue }
+    if (c === '/' && c2 === '*') { i += 2; while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++; i++; continue }
+    if (c === "'" || c === '"') { i++; while (i < src.length && src[i] !== c) { if (src[i] === '\\') i++; i++ } out += ' '; continue }
+    if (c === '`') { stack.push({ type: 'template' }); continue }
+    if (top && top.type === 'interp') {
+      if (c === '{') top.depth++
+      else if (c === '}') { if (top.depth === 0) { stack.pop(); continue } top.depth-- }
+    }
+    out += c
+  }
+  return out
+}
+
 let failed = false
 for (const file of readdirSync(dir).filter(f => f.endsWith('.js')).sort()) {
   const src = readFileSync(join(dir, file), 'utf8')
@@ -51,7 +82,7 @@ for (const file of readdirSync(dir).filter(f => f.endsWith('.js')).sort()) {
         throw new Error(`meta is missing required field: ${field}`)
       }
     }
-    const forbidden = FORBIDDEN.exec(src)
+    const forbidden = FORBIDDEN.exec(stripStringsAndComments(src))
     if (forbidden) {
       throw new Error(`uses ${forbidden[0]} — non-deterministic, breaks workflow resume`)
     }

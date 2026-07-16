@@ -296,22 +296,22 @@ def _fts_write(conn, mode, mid, rec):
 
 
 def upsert(conn, mode, rec):
-    row = conn.execute("SELECT id FROM memories WHERE path=?", (rec["path"],)).fetchone()
     cols = ("scope", "project", "name", "description", "type",
             "created", "verified", "visibility", "mtime", "body")
-    if row:
-        mid = row[0]
-        conn.execute(
-            "UPDATE memories SET " + ",".join(c + "=?" for c in cols) + " WHERE id=?",
-            tuple(rec[c] for c in cols) + (mid,),
-        )
-    else:
-        cur = conn.execute(
-            "INSERT INTO memories(path," + ",".join(cols) + ") VALUES(?," +
-            ",".join("?" for _ in cols) + ")",
-            (rec["path"],) + tuple(rec[c] for c in cols),
-        )
-        mid = cur.lastrowid
+    # Atomic UPSERT instead of check-then-act. A SELECT-then-INSERT is non-atomic: two
+    # writers (e.g. two SessionEnd reindexes closing near-simultaneously, or a manual
+    # `index`/`gc-scan` racing one) can both observe a path absent and both INSERT,
+    # crashing the loser with `UNIQUE constraint failed: memories.path`. ON CONFLICT
+    # folds that loser into an UPDATE within the single write statement, so the writer
+    # race can no longer raise. lastrowid is unreliable on the DO-UPDATE branch, so read
+    # the row id back for the FTS mirror (same transaction — the row is guaranteed present).
+    conn.execute(
+        "INSERT INTO memories(path," + ",".join(cols) + ") VALUES(?," +
+        ",".join("?" for _ in cols) + ") "
+        "ON CONFLICT(path) DO UPDATE SET " + ",".join(c + "=excluded." + c for c in cols),
+        (rec["path"],) + tuple(rec[c] for c in cols),
+    )
+    mid = conn.execute("SELECT id FROM memories WHERE path=?", (rec["path"],)).fetchone()[0]
     _fts_write(conn, mode, mid, rec)
     return mid
 
@@ -446,11 +446,16 @@ def search(base_conn_mode, query, scope="all", limit=DEFAULT_LIMIT):
         for mid, name, desc, path, sc, body in rows:
             if scope_ok and sc != scope:
                 continue
-            hay = ("%s %s %s" % (name, desc, body)).lower()
-            matched = sum(1 for t in toks if t in hay)
+            # Match whole tokens, not raw substrings, mirroring the fts5 unicode61
+            # tokenizer: a substring test counts "test" inside "latest" and "run" inside
+            # "runbook" as hits, inflating both `matched` (the relevance count) and the
+            # frequency weight with coincidences the FTS path would never make.
+            hay_tokens = WORD.findall(("%s %s %s" % (name, desc, body)).lower())
+            hay_set = set(hay_tokens)
+            matched = sum(1 for t in toks if t in hay_set)
             if not matched:
                 continue
-            weight = sum(hay.count(t) for t in toks)
+            weight = sum(hay_tokens.count(t) for t in toks)
             scored.append((matched, weight, mid, name, desc, path, sc))
         scored.sort(key=lambda r: (r[0], r[1]), reverse=True)
         for matched, weight, mid, name, desc, path, sc in scored[:limit]:

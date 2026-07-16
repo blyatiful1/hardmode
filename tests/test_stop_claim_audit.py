@@ -172,3 +172,57 @@ def test_garbage_transcript_lines_skipped(tmp_path):
     r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
                        capture_output=True, text=True, timeout=30)
     assert r.returncode == 2
+
+
+def test_not_all_tests_pass_is_negated(tmp_path):
+    # "Not all tests pass yet" contains the positive substring "all tests pass" —
+    # the suite-claim forms need their own negation handling or honest in-progress
+    # reports false-block after any edit.
+    for msg in ("Not all tests pass yet — two failures remain.",
+                "No checks are green so far; still debugging.",
+                "None of the tests pass on Windows yet."):
+        r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")], last_message=msg)
+        assert r.returncode == 0, msg
+
+
+def test_positive_suite_claims_still_block(tmp_path):
+    # The negation extension must not swallow genuine claims.
+    for msg in ("All tests pass.", "Tests are green now.", "All checks pass, done."):
+        r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")], last_message=msg)
+        assert r.returncode == 2, msg
+
+
+def test_powershell_file_write_counts_as_modification(tmp_path):
+    # Native-Windows sessions write files through the PowerShell tool; the Windows
+    # snippets wire the gate's transcript scan to see those tool_use blocks.
+    r = run_hook(tmp_path, [tool_entry("PowerShell", command="Set-Content -Path config.yaml -Value 'x'")],
+                 last_message="Config fixed, all checks pass.")
+    assert r.returncode == 2
+    r = run_hook(tmp_path, [tool_entry("PowerShell", command='"y" | Out-File data.txt')],
+                 last_message="Done and verified.")
+    assert r.returncode == 2
+
+
+def test_powershell_null_redirect_is_not_a_write(tmp_path):
+    r = run_hook(tmp_path, [tool_entry("PowerShell", command="Get-Process > $null")],
+                 last_message="Done and verified.")
+    assert r.returncode == 0
+
+
+def test_non_ascii_transcript_does_not_disable_the_gate(tmp_path):
+    # Transcripts are UTF-8; on a cp1252-default Python an emoji (whose UTF-8 bytes
+    # include codepoints undefined in cp1252) used to crash the read and fail the
+    # gate OPEN — the flagship hook silently inert exactly on real sessions.
+    import os
+    transcript = tmp_path / "transcript.jsonl"
+    entries = [text_entry("Working on the parser \U0001f355 with umlauts: äöü"),
+               tool_entry("Edit", file_path="x.py")]
+    transcript.write_text("\n".join(json.dumps(e, ensure_ascii=False) for e in entries),
+                          encoding="utf-8")
+    payload = {"transcript_path": str(transcript), "stop_hook_active": False,
+               "last_assistant_message": "Fertig \U0001f389 — all tests pass."}
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    r = subprocess.run([sys.executable, str(HOOK)],
+                       input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                       capture_output=True, timeout=30, env=env)
+    assert r.returncode == 2

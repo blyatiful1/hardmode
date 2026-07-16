@@ -197,3 +197,26 @@ def test_bash_write_in_sync_with_claim_audit(tmp_path):
     gate = _load("stop-claim-audit.py")
     assert alarm.BASH_WRITE.pattern == gate.BASH_WRITE.pattern
     assert alarm.MODIFYING_TOOLS == gate.MODIFYING_TOOLS
+
+def test_powershell_grind_is_tracked(tmp_path):
+    # Native-Windows sessions drive PowerShell as the primary shell; the alarm
+    # must count its failures exactly like Bash ones (the Windows snippets wire
+    # PostToolUseFailure to Bash|PowerShell).
+    for _ in range(2):
+        assert run_hook(tmp_path, "PowerShell", {"command": "python -m pytest -q"},
+                        {}, event="PostToolUseFailure").returncode == 0
+    r = run_hook(tmp_path, "PowerShell", {"command": "python -m pytest -q"},
+                 {}, event="PostToolUseFailure")
+    assert r.returncode == 2
+    assert "LOOP ALARM" in r.stderr
+
+
+def test_powershell_write_success_resets_counts(tmp_path):
+    for _ in range(2):
+        run_hook(tmp_path, "PowerShell", {"command": "python -m pytest -q"},
+                 {}, event="PostToolUseFailure")
+    # A succeeding PowerShell write cmdlet counts as a successful modification.
+    run_hook(tmp_path, "PowerShell", {"command": "Set-Content -Path x.py -Value 'fix'"})
+    for _ in range(2):
+        assert run_hook(tmp_path, "PowerShell", {"command": "python -m pytest -q"},
+                        {}, event="PostToolUseFailure").returncode == 0

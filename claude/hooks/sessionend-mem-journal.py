@@ -158,6 +158,13 @@ def reindex(base):
 
 
 def main():
+    # The payload is UTF-8 regardless of OS locale; on Windows Python <=3.14 the cp1252
+    # default would UnicodeError on a multi-byte cwd/reason and drop the stdin data,
+    # writing a blank breadcrumb instead of the real one.
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     try:
         data = json.load(sys.stdin)
     except Exception:

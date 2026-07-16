@@ -135,3 +135,22 @@ def test_slow_git_still_writes_the_breadcrumb_within_budget(tmp_path):
 def test_malformed_stdin_fails_open(tmp_path):
     r = run_hook(tmp_path, raw_stdin="not json")
     assert r.returncode == 0
+
+
+def test_non_ascii_stdin_is_decoded_under_ascii_locale(tmp_path):
+    # With the child's stdio forced to ASCII, a UTF-8 payload must still be decoded (the
+    # hook reconfigures stdin to utf-8). Old cp1252/ascii defaults would UnicodeError,
+    # the hook would fall back to data={}, and write a blank breadcrumb losing cwd/reason.
+    payload = {"session_id": "s", "cwd": str(ROOT), "reason": "café 日本語 localización"}
+    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), PYTHONIOENCODING="ascii")
+    r = subprocess.run(
+        [sys.executable, str(HOOK)],
+        input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        capture_output=True, timeout=30, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    lines = [ln for ln in journal_path(tmp_path).read_text(encoding="utf-8").splitlines()
+             if ln.strip()]
+    assert len(lines) == 1
+    entry = json.loads(lines[0])
+    assert entry["reason"] == "café 日本語 localización"  # decoded, not lost to {}

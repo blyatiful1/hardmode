@@ -57,7 +57,7 @@ is already fixed.
 - Build mobile-first; the desktop composition is earned, not assumed.
 
 ## Stage W3 — Verify like a visitor, then like a lawyer
-- Screenshots at 360/768/1440 (or drive the real browser) — never assert what a page
+- Screenshots at 320/768/1440 (or drive the real browser) — never assert what a page
   looks like without capturing it; that is doctrine, not preference.
 - Drive one full pass with reduced motion enabled and one keyboard-only walk of the
   primary flow. Check the weight and request count against the view's budget.

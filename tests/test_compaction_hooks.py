@@ -116,3 +116,30 @@ def test_recovery_malformed_stdin_fails_open(tmp_path):
     r = run(RECOVER, {}, tmp_path, raw_stdin="not json")
     assert r.returncode == 0
     assert "CONTEXT JUST COMPACTED" in r.stdout
+
+
+def test_non_ascii_request_survives_the_save_recover_round_trip(tmp_path):
+    # The user's request and the transcript are UTF-8; under a legacy-locale
+    # Python (cp1252 on Windows <=3.14) an emoji used to crash the save (fail-open
+    # -> no state file) and the recovery print — the kit's flagship compaction
+    # recovery silently inert on real sessions. PYTHONIOENCODING simulates the
+    # worst-case console; the transcript/state files exercise the open() paths.
+    msg = "Baue das Widget \U0001f355 mit Umlauten: äöüß"
+    t = tmp_path / "transcript.jsonl"
+    t.write_text(json.dumps({"type": "user", "message": {"content": msg}},
+                            ensure_ascii=False), encoding="utf-8")
+    env_io = dict(os.environ, FABLE_STATE_DIR=str(tmp_path), PYTHONIOENCODING="cp1252")
+    r = subprocess.run([sys.executable, str(SAVE)],
+                       input=json.dumps({"session_id": "s1", "transcript_path": str(t)},
+                                        ensure_ascii=False).encode("utf-8"),
+                       capture_output=True, timeout=30, env=env_io)
+    assert r.returncode == 0
+    assert saved(tmp_path).read_text(encoding="utf-8") == msg
+
+    r2 = subprocess.run([sys.executable, str(RECOVER)],
+                        input=json.dumps({"session_id": "s1", "cwd": str(tmp_path)}).encode("utf-8"),
+                        capture_output=True, timeout=30, env=env_io)
+    assert r2.returncode == 0
+    out = r2.stdout.decode("utf-8", errors="replace")
+    assert "CONTEXT JUST COMPACTED" in out
+    assert msg in out

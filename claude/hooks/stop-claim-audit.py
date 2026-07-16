@@ -27,16 +27,28 @@ NEGATED = re.compile(
     r"\b(?:not|never|isn'?t|aren'?t|wasn'?t|haven'?t|hasn'?t|can'?t be|cannot be"
     r"|(?:needs?|remains?|still|yet) to be)"
     r"\s+(?:yet\s+|been\s+|fully\s+|actually\s+)*"
-    r"(?:done|completed?|finished|verified|fixed|resolved|implemented)\b",
+    r"(?:done|completed?|finished|verified|fixed|resolved|implemented)\b"
+    # The suite-claim forms need their own negations: "not all tests pass yet" /
+    # "no checks are green" would otherwise still contain the positive CLAIM
+    # substring ("all tests pass" / "checks are green") and false-block an
+    # honest in-progress report.
+    r"|\b(?:not\s+all|no|none\s+of\s+the)\s+(?:tests?|checks?|parts?)"
+    r"\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b",
     re.IGNORECASE,
 )
 MODIFYING_TOOLS = {"Edit", "Write", "NotebookEdit"}
-# Bash commands that plausibly write files: redirections (except to /dev/*),
-# in-place editors, file movers. Conservative — read-only sessions stay untaxed.
+# Shell commands that plausibly write files: redirections (except to /dev/* and
+# PowerShell's $null), in-place editors, file movers, and the PowerShell writing
+# cmdlets — the Windows snippets wire the shell hooks to `Bash|PowerShell`, so a
+# native-Windows session's primary shell is covered too. Conservative — read-only
+# sessions stay untaxed. Kept byte-identical to posttool-loop-alarm.BASH_WRITE
+# (enforced by tests/test_loop_alarm.py::test_bash_write_in_sync_with_claim_audit).
 BASH_WRITE = re.compile(
-    r"(?<![0-9&])>>?\s*(?!&|/dev/(?:null|stdout|stderr)\b)\S"
+    r"(?<![0-9&])>>?\s*(?!&|\$null(?=[\s;|&]|$)|/dev/(?:null|stdout|stderr)\b)\S"
     r"|(?:^|[|&;]\s*)(?:sed\s+(?:-\S+\s+)*-i|tee\s|patch\s|truncate\s"
-    r"|(?:git\s+(?:apply|mv|rm|checkout|restore|stash))|mv\s|cp\s|rm\s)"
+    r"|(?:git\s+(?:apply|mv|rm|checkout|restore|stash))|mv\s|cp\s|rm\s"
+    r"|(?i:set-content|add-content|out-file|new-item|move-item|copy-item"
+    r"|remove-item|rename-item)\b)"
 )
 
 REASON = (
@@ -96,13 +108,21 @@ def bash_touches_tests(cmd):
 
 
 def main():
+    # Payload and transcript are UTF-8 regardless of OS locale; on Windows Python
+    # <=3.14 the cp1252 default would crash on multi-byte content (an emoji in the
+    # transcript) and fail the gate open — silently disabling it (CONF-UTF8).
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     data = json.load(sys.stdin)
     if data.get("stop_hook_active"):
         return 0  # already continuing because of this hook — let the session end
     last_text = data.get("last_assistant_message", "")
     modified = False
     modified_tests = False
-    with open(data["transcript_path"]) as f:
+    with open(data["transcript_path"], encoding="utf-8", errors="replace") as f:
         for line in f:
             try:
                 entry = json.loads(line)
@@ -127,7 +147,7 @@ def main():
                         fp = inp.get("file_path", "") if isinstance(inp, dict) else ""
                         if is_test_path(fp):
                             modified_tests = True
-                    elif name == "Bash":
+                    elif name in ("Bash", "PowerShell"):
                         inp = block.get("input")
                         cmd = inp.get("command", "") if isinstance(inp, dict) else ""
                         if isinstance(cmd, str) and BASH_WRITE.search(cmd):

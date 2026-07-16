@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 fable-protocol doctor for Windows — verifies an installation is actually live, not silently inert.
 
@@ -28,6 +28,46 @@ function Warn([string]$Msg) { Write-Host "  warn: $Msg" }
 function Test-Identical([string]$A, [string]$B) {
     if (-not (Test-Path $B -PathType Leaf)) { return $false }
     return (Get-FileHash -Algorithm SHA256 $A).Hash -eq (Get-FileHash -Algorithm SHA256 $B).Hash
+}
+
+# Content compare tolerant of CRLF/LF differences: autocrlf makes the installed
+# copy and the repo checkout differ on line endings without real drift, and
+# install.ps1 rewrites agents to LF. Staleness is reported as a warn, not a FAIL.
+function Get-NormContent([string]$Path) { return ([System.IO.File]::ReadAllText($Path)) -replace "`r", '' }
+function Test-ContentSame([string]$A, [string]$B) {
+    if (-not (Test-Path $B -PathType Leaf)) { return $false }
+    return (Get-NormContent $A) -eq (Get-NormContent $B)
+}
+# Like Test-ContentSame but ignores an installer-injected `model:` frontmatter pin
+# (-StrongModel), so a pinned install is not misreported as drift.
+function Test-AgentSame([string]$A, [string]$B) {
+    if (-not (Test-Path $B -PathType Leaf)) { return $false }
+    $ca = (Get-NormContent $A) -split "`n" | Where-Object { $_ -notmatch '^model: ' }
+    $cb = (Get-NormContent $B) -split "`n" | Where-Object { $_ -notmatch '^model: ' }
+    return (($ca -join "`n") -eq ($cb -join "`n"))
+}
+
+# event -> set of wired hook basenames, from a parsed settings/snippet object.
+function Get-EventHookMap($Obj) {
+    $map = @{}
+    if ($null -eq $Obj) { return $map }
+    $hp = $Obj.PSObject.Properties['hooks']
+    if ($null -eq $hp -or $null -eq $hp.Value) { return $map }
+    foreach ($ev in $hp.Value.PSObject.Properties) {
+        $names = New-Object 'System.Collections.Generic.HashSet[string]'
+        foreach ($group in @($ev.Value)) {
+            if ($null -eq $group) { continue }
+            $gh = $group.PSObject.Properties['hooks']
+            if ($null -eq $gh) { continue }
+            foreach ($h in @($gh.Value)) {
+                $cp = $h.PSObject.Properties['command']
+                if ($null -eq $cp) { continue }
+                [void]$names.Add(((([string]$cp.Value).TrimEnd()) -split '/')[-1])
+            }
+        }
+        $map[$ev.Name] = $names
+    }
+    return $map
 }
 
 # Best python launcher on this machine: py -3, then python, then python3.
@@ -101,24 +141,28 @@ foreach ($f in Get-ChildItem (Join-Path $Src 'hooks') -Filter '*.py') {
         Invoke-Python $py @('-m', 'py_compile', $t) | Out-Null
         if ($LASTEXITCODE -ne 0) {
             Bad "hook does not compile: $t"
-        } elseif (-not (Test-Identical $f.FullName $t)) {
-            Warn "hook differs from this repo checkout: $t (older kit version?)"
+        } elseif (-not (Test-ContentSame $f.FullName $t)) {
+            Warn "hook differs from this repo checkout: $t (older kit version? re-run install.ps1)"
         } else {
             Ok "hook: $($f.Name)"
         }
-    } elseif (-not (Test-Identical $f.FullName $t)) {
-        Warn "hook differs from this repo checkout: $t (older kit version?)"
+    } elseif (-not (Test-ContentSame $f.FullName $t)) {
+        Warn "hook differs from this repo checkout: $t (older kit version? re-run install.ps1)"
     } else {
         Ok "hook: $($f.Name)"
     }
 }
 foreach ($f in Get-ChildItem (Join-Path $Src 'agents') -Filter '*.md') {
-    if (Test-Path (Join-Path (Join-Path $Dst 'agents') $f.Name) -PathType Leaf) { Ok "agent: $($f.Name)" }
-    else { Bad "agent missing: $(Join-Path (Join-Path $Dst 'agents') $f.Name)" }
+    $t = Join-Path (Join-Path $Dst 'agents') $f.Name
+    if (-not (Test-Path $t -PathType Leaf)) { Bad "agent missing: $t" }
+    elseif (-not (Test-AgentSame $f.FullName $t)) { Warn "agent differs from this repo checkout: $t (re-run install.ps1)" }
+    else { Ok "agent: $($f.Name)" }
 }
 foreach ($f in Get-ChildItem (Join-Path $Src 'workflows') -Filter '*.js') {
-    if (Test-Path (Join-Path (Join-Path $Dst 'workflows') $f.Name) -PathType Leaf) { Ok "workflow: /$($f.BaseName)" }
-    else { Bad "workflow missing: $(Join-Path (Join-Path $Dst 'workflows') $f.Name)" }
+    $t = Join-Path (Join-Path $Dst 'workflows') $f.Name
+    if (-not (Test-Path $t -PathType Leaf)) { Bad "workflow missing: $t" }
+    elseif (-not (Test-ContentSame $f.FullName $t)) { Warn "workflow differs from this repo checkout: $t (re-run install.ps1)" }
+    else { Ok "workflow: /$($f.BaseName)" }
 }
 foreach ($d in Get-ChildItem (Join-Path $Src 'skills') -Directory) {
     $complete = $true
@@ -129,8 +173,8 @@ foreach ($d in Get-ChildItem (Join-Path $Src 'skills') -Directory) {
         $t = Join-Path (Join-Path (Join-Path $Dst 'skills') $d.Name) $rel
         if (-not (Test-Path $t -PathType Leaf)) {
             Bad "skill file missing: $t"; $complete = $false
-        } elseif (-not (Test-Identical $f.FullName $t)) {
-            Warn "skill file differs from this repo checkout: $t (older kit version?)"; $drifted = $true
+        } elseif (-not (Test-ContentSame $f.FullName $t)) {
+            Warn "skill file differs from this repo checkout: $t (older kit version? re-run install.ps1)"; $drifted = $true
         }
     }
     if ($complete -and -not $drifted) { Ok "skill: $($d.Name)" }
@@ -162,6 +206,9 @@ if (-not (Test-Path $mem -PathType Leaf)) {
         }
         if ($rc -eq 0) { Ok "mem CLI (mode=$mode)" }
         else { Bad "mem CLI self-check failed: (with CLAUDE_DIR=$Dst) python $mem doctor" }
+        if (-not (Test-ContentSame (Join-Path (Join-Path $Src 'cli') 'mem.py') $mem)) {
+            Warn "mem CLI differs from this repo checkout: $mem (re-run install.ps1)"
+        }
     }
 }
 
@@ -208,9 +255,23 @@ if (-not (Test-Path $settingsPath -PathType Leaf)) {
         Bad "settings.json is not valid JSON — Claude Code will ignore it"
     } else {
         Ok "settings.json parses"
-        foreach ($f in Get-ChildItem (Join-Path $Src 'hooks') -Filter '*.py') {
-            if ($settingsText.Contains($f.Name)) { Ok "wired: $($f.Name)" }
-            else { Bad "NOT wired in settings.json: $($f.Name) (merge the snippet from install.ps1)" }
+        # Event-level wiring: a substring test of the filename cannot tell a hook
+        # wired to the WRONG event, nor a partial merge that dropped one block of a
+        # multi-event hook (e.g. the loop alarm's PostToolUseFailure) from a correct
+        # one. Compare each hook's presence PER EVENT against the shipped snippet's
+        # own event map (matcher-agnostic, so the widened Bash|PowerShell matcher is
+        # accepted).
+        $snippetPath = Join-Path (Join-Path $Src 'settings') 'settings-snippet-windows.json'
+        $expected = Get-EventHookMap ([System.IO.File]::ReadAllText($snippetPath) | ConvertFrom-Json)
+        $actual = Get-EventHookMap $settings
+        foreach ($ev in ($expected.Keys | Sort-Object)) {
+            foreach ($name in ($expected[$ev] | Sort-Object)) {
+                if ($actual.ContainsKey($ev) -and $actual[$ev].Contains($name)) {
+                    Ok "wired: $name [$ev]"
+                } else {
+                    Bad "NOT wired under $ev in settings.json: $name (merge the snippet from install.ps1)"
+                }
+            }
         }
         $effort = $null
         try { $effort = $settings.effortLevel } catch { }

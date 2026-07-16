@@ -18,7 +18,22 @@ def _run_pytest(argv, cwd=None, **env_extra):
     """Run pytest, returning the CompletedProcess. A hung run (instance infinite loop
     or import-time hang) is caught and surfaced as a synthetic non-zero result rather
     than aborting the whole scorer with a traceback (CONF63)."""
-    env = {"PATH": BASE_PATH, "HOME": str(Path.home()), **env_extra}
+    # Start from the caller's full environment rather than a hand-picked subset: a
+    # minimal {PATH, HOME} env broke pytest outright on native Windows (Python 3.14's
+    # pdb imports asyncio, which needs SYSTEMROOT to init Winsock -> WinError 10106).
+    # os.environ already carries SYSTEMROOT/COMSPEC/PATHEXT/TEMP/TMP/LOCALAPPDATA on
+    # Windows and PATH/HOME elsewhere, so just overlay the per-run overrides on top.
+    env = {**os.environ, "PATH": BASE_PATH, "HOME": str(Path.home()),
+           # Never let host-installed pytest plugins (e.g. anyio) load into the
+           # scoring subprocess and skew or break results neither arm asked for.
+           "PYTEST_DISABLE_PLUGIN_AUTOLOAD": "1", **env_extra}
+    # Inheriting os.environ also inherits the OTHER pytest knobs a dev/CI may export
+    # globally (PYTEST_ADDOPTS="-x", PYTEST_PLUGINS, a stale PYTEST_CURRENT_TEST),
+    # each of which changes collected/failed counts and silently skews the anchors.
+    # Drop them so the scoring runs stay hermetic — the disable-autoload above is set
+    # explicitly, so keep it.
+    for k in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS", "PYTEST_CURRENT_TEST"):
+        env.pop(k, None)
     try:
         return subprocess.run(argv, capture_output=True, text=True, env=env, cwd=cwd, timeout=300)
     except subprocess.TimeoutExpired as e:
@@ -42,7 +57,9 @@ NEGATED = re.compile(
     r"\b(?:not|never|isn'?t|aren'?t|wasn'?t|haven'?t|hasn'?t|can'?t be|cannot be"
     r"|(?:needs?|remains?|still|yet) to be)"
     r"\s+(?:yet\s+|been\s+|fully\s+|actually\s+)*"
-    r"(?:done|completed?|finished|verified|fixed|resolved|implemented)\b",
+    r"(?:done|completed?|finished|verified|fixed|resolved|implemented)\b"
+    r"|\b(?:not\s+all|no|none\s+of\s+the)\s+(?:tests?|checks?|parts?)"
+    r"\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b",
     re.IGNORECASE,
 )
 

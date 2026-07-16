@@ -4,7 +4,8 @@
 Deterministic backstop for the grinding failure mode: the doctrine's "two failed
 fixes -> oracle" rule is advisory, and the benchmark showed advisory rules get
 skipped under momentum. This hook counts, per session, how many times the SAME
-Bash command has failed since the last successful file modification. On the 3rd
+shell command (Bash — and on Windows, PowerShell) has failed since the last
+successful file modification. On the 3rd
 identical failure (configurable via FABLE_LOOP_THRESHOLD; use 2 on smaller driver
 models) it injects a one-time nudge (exit 2 -> stderr shown to the model;
 PostToolUse cannot block, the command already ran).
@@ -52,13 +53,18 @@ def threshold():
     return THRESHOLD_DEFAULT
 
 MODIFYING_TOOLS = {"Edit", "Write", "NotebookEdit"}
-# Same conservative "this Bash command plausibly writes files" heuristic as the
+# The shell tools whose commands are tracked for grinding. On native Windows the
+# snippets wire this hook to the PowerShell tool too — the primary shell there.
+SHELL_TOOLS = {"Bash", "PowerShell"}
+# Same conservative "this shell command plausibly writes files" heuristic as the
 # claim-audit gate. Kept byte-identical to stop-claim-audit.BASH_WRITE and enforced
 # by tests/test_loop_alarm.py::test_bash_write_in_sync_with_claim_audit.
 BASH_WRITE = re.compile(
-    r"(?<![0-9&])>>?\s*(?!&|/dev/(?:null|stdout|stderr)\b)\S"
+    r"(?<![0-9&])>>?\s*(?!&|\$null(?=[\s;|&]|$)|/dev/(?:null|stdout|stderr)\b)\S"
     r"|(?:^|[|&;]\s*)(?:sed\s+(?:-\S+\s+)*-i|tee\s|patch\s|truncate\s"
-    r"|(?:git\s+(?:apply|mv|rm|checkout|restore|stash))|mv\s|cp\s|rm\s)"
+    r"|(?:git\s+(?:apply|mv|rm|checkout|restore|stash))|mv\s|cp\s|rm\s"
+    r"|(?i:set-content|add-content|out-file|new-item|move-item|copy-item"
+    r"|remove-item|rename-item)\b)"
 )
 
 NUDGE = (
@@ -66,7 +72,7 @@ NUDGE = (
     "{n} times with no successful change in between. Running it again will not produce "
     "new information. Stop grinding: (1) write the dead hypotheses down, one line each; "
     "(2) run the cheapest DIFFERENT experiment that discriminates between the survivors — "
-    "or hand ALL evidence to the `oracle` agent now. A third identical attempt is the "
+    "or hand ALL evidence to the `oracle` agent now. Another identical attempt is the "
     "documented failure mode this alarm exists to catch."
 )
 
@@ -92,7 +98,7 @@ def prune_stale(d):
 
 def load_state(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             s = json.load(f)
         if isinstance(s, dict):
             return {"counts": dict(s.get("counts", {})), "nudged": list(s.get("nudged", []))}
@@ -107,7 +113,7 @@ def save_state(path, state):
         for k in list(state["counts"])[: len(state["counts"]) - MAX_TRACKED]:
             del state["counts"][k]
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(state, f)
     os.replace(tmp, path)
 
@@ -129,6 +135,14 @@ def failed(tool_response):
 
 
 def main():
+    # Payloads are UTF-8 regardless of OS locale; on Windows Python <=3.14 the
+    # cp1252 default would crash on multi-byte content (a non-ASCII command) and
+    # fail the alarm open — silently disabling it (CONF-UTF8).
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     data = json.load(sys.stdin)
     session = re.sub(r"[^A-Za-z0-9_-]", "_", str(data.get("session_id", "unknown")))[:80]
     d = state_dir()
@@ -149,18 +163,18 @@ def main():
     if not is_failure:
         # A SUCCESSFUL modification (or succeeding write-command) means iteration
         # moved forward — retrying checks is legitimate again, so clear everything.
-        if tool in MODIFYING_TOOLS or (tool == "Bash" and cmd and BASH_WRITE.search(cmd)):
+        if tool in MODIFYING_TOOLS or (tool in SHELL_TOOLS and cmd and BASH_WRITE.search(cmd)):
             state["counts"] = {}
             save_state(path, state)
             return 0
-        # A non-write Bash command that succeeded clears only its own count.
-        if tool == "Bash" and cmd:
+        # A non-write shell command that succeeded clears only its own count.
+        if tool in SHELL_TOOLS and cmd:
             state["counts"].pop(cmd, None)
             save_state(path, state)
         return 0
 
-    # From here: this is a failure. Only Bash commands are tracked for grinding.
-    if tool != "Bash" or not cmd:
+    # From here: this is a failure. Only shell commands are tracked for grinding.
+    if tool not in SHELL_TOOLS or not cmd:
         return 0
 
     n = state["counts"].get(cmd, 0) + 1

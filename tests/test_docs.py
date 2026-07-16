@@ -13,7 +13,10 @@ LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 def test_relative_markdown_links_resolve():
     broken = []
     for doc in DOCS:
-        for target in LINK.findall(doc.read_text()):
+        # utf-8 explicitly: the docs contain non-ASCII (em-dashes, the demo's emoji);
+        # the OS-locale default (cp1252 on Windows) would crash the read — the same
+        # encoding bug this kit hardens its hooks against.
+        for target in LINK.findall(doc.read_text(encoding="utf-8")):
             if target.startswith(("http://", "https://", "#", "mailto:")):
                 continue
             path = target.split("#")[0]
@@ -25,8 +28,8 @@ def test_relative_markdown_links_resolve():
 def test_succession_knobs_are_real():
     # Every config knob SUCCESSION.md tells an heir to set must exist in the code
     # it claims to configure.
-    succession = (ROOT / "docs" / "SUCCESSION.md").read_text()
-    loop_alarm = (ROOT / "claude" / "hooks" / "posttool-loop-alarm.py").read_text()
+    succession = (ROOT / "docs" / "SUCCESSION.md").read_text(encoding="utf-8")
+    loop_alarm = (ROOT / "claude" / "hooks" / "posttool-loop-alarm.py").read_text(encoding="utf-8")
     assert "FABLE_LOOP_THRESHOLD" in succession
     assert "FABLE_LOOP_THRESHOLD" in loop_alarm
     # ...and the workflows it routes small models to are the ones that ship.
@@ -38,7 +41,7 @@ def test_succession_knobs_are_real():
 def test_oracle_carries_the_field_notes():
     # The diagnostic priors must live where they are read at the moment of need,
     # not only in the docs.
-    oracle = (ROOT / "claude" / "agents" / "oracle.md").read_text()
+    oracle = (ROOT / "claude" / "agents" / "oracle.md").read_text(encoding="utf-8")
     assert "Field notes" in oracle
     assert "reproducer" in oracle.lower()
 
@@ -50,4 +53,4 @@ def test_state_env_var_consistent_across_stateful_hooks():
     for name in ("posttool-loop-alarm.py", "posttool-test-weakening-alarm.py",
                  "precompact-save-task.py", "sessionstart-compact-recovery.py",
                  "userpromptsubmit-mem-recall.py"):
-        assert "FABLE_STATE_DIR" in (hooks / name).read_text(), name
+        assert "FABLE_STATE_DIR" in (hooks / name).read_text(encoding="utf-8"), name

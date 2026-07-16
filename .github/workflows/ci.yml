@@ -114,6 +114,23 @@ jobs:
           Copy-Item claude/settings/settings-snippet-windows.json (Join-Path $env:CLAUDE_DIR 'settings.json')
           ./tools/doctor.ps1
 
+      - name: Installer + doctor under Windows PowerShell 5.1 (documented -File path)
+        shell: powershell
+        run: |
+          # `shell: powershell` is Windows PowerShell 5.1 — the ONLY PowerShell on
+          # stock Windows and the interpreter README's `powershell -File install.ps1`
+          # targets; the pwsh steps above never exercise it, which is how the BOM-less
+          # em-dash parse bug shipped. The bug reproduces ONLY via `-File` (which reads
+          # a BOM-less script through the ANSI codepage, turning an em-dash byte into a
+          # string-delimiting curly quote) — dot-sourcing under the runner's OEM
+          # codepage does not — so this step must SPAWN the documented -File call.
+          $env:CLAUDE_DIR = Join-Path $env:RUNNER_TEMP 'fake-claude-ps51'
+          powershell -NoProfile -ExecutionPolicy Bypass -File install.ps1 *>&1 | Out-Null
+          if ($LASTEXITCODE -ne 0) { Write-Host 'install.ps1 failed to parse/run under Windows PowerShell 5.1 (-File)'; exit 1 }
+          Copy-Item claude/settings/settings-snippet-windows.json (Join-Path $env:CLAUDE_DIR 'settings.json')
+          powershell -NoProfile -ExecutionPolicy Bypass -File tools/doctor.ps1
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
       - name: Unit tests (POSIX-installer tests self-skip)
         shell: pwsh
         run: |

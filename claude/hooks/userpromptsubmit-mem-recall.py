@@ -102,7 +102,7 @@ def prune_stale(d):
 
 def load_injected(path):
     try:
-        with open(path) as f:
+        with open(path, encoding="utf-8", errors="replace") as f:
             data = json.load(f)
         if isinstance(data, list):
             return set(str(x) for x in data)
@@ -113,7 +113,7 @@ def load_injected(path):
 
 def save_injected(path, injected):
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(sorted(injected), f)
     os.replace(tmp, path)
 
@@ -138,9 +138,14 @@ def keywords(text):
 
 def min_overlap(nkw):
     """Relevance gate: how many distinct prompt keywords a hit's title+description
-    must contain. FABLE_MEM_MIN_SCORE overrides; default requires 2 (or 1 for a
-    one-keyword prompt) so weak single-token coincidences stay silent."""
-    raw = os.environ.get("FABLE_MEM_MIN_SCORE")
+    must contain. FABLE_MEM_MIN_OVERLAP overrides; default requires 2 (or 1 for a
+    one-keyword prompt) so weak single-token coincidences stay silent.
+
+    This is a keyword-OVERLAP COUNT (small integers, 1-3). It is a DIFFERENT knob from
+    mem.py search's FABLE_MEM_MIN_SCORE, which is a bm25-derived score threshold on a
+    corpus-dependent magnitude. They used to be the same env var, so tuning recall
+    silently reconfigured (and could blank out) CLI search on an incompatible scale."""
+    raw = os.environ.get("FABLE_MEM_MIN_OVERLAP")
     if raw:
         try:
             return max(1, int(float(raw)))
@@ -232,8 +237,12 @@ def query_hits(base, kws):
         # index not yet refreshed) don't send the caller to a missing path.
         if path and not os.path.exists(path):
             continue
-        surface = ("%s %s" % (name or "", desc or "")).lower()
-        overlap = sum(1 for t in kws if t in surface)
+        # Count whole-token matches, not substring containment. `t in surface` (a raw
+        # substring test) counts prompt keyword "run" inside "runbook" and "test" inside
+        # "latest", inflating the overlap past the >=2 gate and surfacing unrelated
+        # memories. Tokenize with the same WORD regex the fts5 unicode61 index uses.
+        surface_tokens = set(WORD.findall(("%s %s" % (name or "", desc or "")).lower()))
+        overlap = sum(1 for t in kws if t in surface_tokens)
         if overlap >= need:
             scored.append((overlap, name or "", desc or "", path, scope or "", project or ""))
     # Strongest first; ties broken by shorter description (more specific), stable.
@@ -288,6 +297,14 @@ def render(hits):
 
 # ---------------------------------------------------------------------------
 def main():
+    # Stdin (the prompt) and stdout (the injected context) are UTF-8 regardless of OS
+    # locale; on Windows Python <=3.14 the cp1252 default would UnicodeError on a
+    # multi-byte prompt/memory and fail this hook open — silently dropping recall.
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     try:
         data = json.load(sys.stdin)
     except Exception:

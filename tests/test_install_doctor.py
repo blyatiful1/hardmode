@@ -89,3 +89,56 @@ def test_doctor_flags_unmerged_doctrine(tmp_path):
     r = run(DOCTOR, claude, state_dir=tmp_path / "state")
     assert r.returncode == 1
     assert "CLAUDE.fable-protocol.md" in r.stdout
+
+
+def test_doctor_fails_on_partial_multi_event_merge(tmp_path):
+    # Finding 4: dropping ONLY the loop alarm's PostToolUseFailure block (a plausible
+    # hand-merge slip) leaves it wired under PostToolUse — the old substring check
+    # called that healthy. Event-level wiring must FAIL.
+    claude = tmp_path / "claude"
+    install_and_merge_settings(claude)
+    settings = json.loads((claude / "settings.json").read_text())
+    del settings["hooks"]["PostToolUseFailure"]
+    (claude / "settings.json").write_text(json.dumps(settings))
+    r = run(DOCTOR, claude, state_dir=tmp_path / "state")
+    assert r.returncode == 1, r.stdout + r.stderr
+    assert "posttool-loop-alarm.py" in r.stdout and "PostToolUseFailure" in r.stdout
+
+
+def test_doctor_warns_on_windows_python_settings(tmp_path):
+    # Finding 5: a Windows snippet (bare `python`) merged on a POSIX box has hooks
+    # that never fire; doctor.sh must warn, mirroring doctor.ps1's python3 guard.
+    claude = tmp_path / "claude"
+    r = run(INSTALL, claude)
+    assert r.returncode == 0
+    win = json.loads((ROOT / "claude" / "settings" / "settings-snippet-windows.json").read_text())
+    (claude / "settings.json").write_text(json.dumps(win))
+    r = run(DOCTOR, claude, state_dir=tmp_path / "state")
+    assert "bare 'python'" in r.stdout, r.stdout
+
+
+def test_doctor_warns_on_drifted_component(tmp_path):
+    # Finding 6: an installed file that no longer matches the repo it is checked
+    # against must WARN (re-run the installer) — but stay a warning, not a FAIL.
+    claude = tmp_path / "claude"
+    install_and_merge_settings(claude)
+    wf = claude / "workflows" / "paranoid-review.js"
+    wf.write_text(wf.read_text() + "\n// drifted\n")
+    r = run(DOCTOR, claude, state_dir=tmp_path / "state")
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "workflow differs" in r.stdout and "paranoid-review.js" in r.stdout
+
+
+def test_doctor_ignores_crlf_only_drift(tmp_path):
+    # Finding 6: the staleness compare is CRLF-normalized, so a pure line-ending
+    # difference (autocrlf; install.ps1 rewrites agents to LF) is not drift.
+    claude = tmp_path / "claude"
+    install_and_merge_settings(claude)
+    hook = claude / "hooks" / "stop-claim-audit.py"
+    repo = ROOT / "claude" / "hooks" / "stop-claim-audit.py"
+    if hook.read_bytes().replace(b"\r\n", b"\n") != repo.read_bytes().replace(b"\r\n", b"\n"):
+        pytest.skip("repo hook concurrently edited; cannot isolate the CRLF-only case")
+    hook.write_bytes(hook.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    r = run(DOCTOR, claude, state_dir=tmp_path / "state")
+    drift = [ln for ln in r.stdout.splitlines() if "differs" in ln and "stop-claim-audit.py" in ln]
+    assert not drift, drift

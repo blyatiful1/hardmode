@@ -12,8 +12,14 @@ operations, in two tiers:
     on a clean tree they pass untouched.
   * always-dangerous ops — `git stash drop|clear` (discards saved work),
     bare force-push in either spelling (`--force`/`-f` or a `+refspec`;
-    use --force-with-lease), and `rm -rf` aimed at catastrophic targets
-    (/, ~, ., .., *) — blocked regardless of tree state.
+    use --force-with-lease), and recursive rm aimed at a catastrophic target
+    (/, ~, $HOME, drive roots, ., .., *) in ANY argument position — long-form
+    GNU flags and the PowerShell spellings (Remove-Item/ri/del, -Recurse and
+    its abbreviations) included — blocked regardless of tree state.
+
+On native Windows the guard also receives the PowerShell tool (the Windows
+snippets match `Bash|PowerShell`): git commands are shell-identical, and the
+rm check recognizes the PowerShell deletion spellings above.
 
 Escape hatch: after the USER explicitly approves the loss, re-run the command
 prefixed with FABLE_DESTRUCTIVE_OK=1. The model must never self-approve.
@@ -39,7 +45,9 @@ _QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 _SINGLE = re.compile(r"'[^']*'")
 # Command substitutions execute inside double quotes and unquoted, but NOT inside single
 # quotes (there they are literal). A destructive command hidden in "$(...)" or `...` must
-# stay visible to the checks; one in '$(...)' must not false-trip. Single level of nesting.
+# stay visible to the checks; one in '$(...)' must not false-trip. Scanned recursively to
+# a bounded depth (see _iter_command_slices); the regex itself captures the innermost
+# parenthesis-free span, so nested substitutions surface across recursion passes.
 _SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
 
 
@@ -75,9 +83,33 @@ def _rm_view(s):
 
 
 def _subst_contents(segment):
-    """Contents of ACTIVE `$(...)` / backtick command substitutions in a segment (one
-    nesting level). Pass a single-quote-blanked slice so literal '$(...)' is ignored."""
+    """Contents of ACTIVE `$(...)` / backtick command substitutions in a segment (the
+    caller recurses, bounded). Pass a single-quote-blanked slice so literal '$(...)'
+    is ignored."""
     return [a or b for a, b in _SUBST.findall(segment)]
+
+
+_HEREDOC_START = re.compile(r"<<-?\s*(['\"])([A-Za-z_]\w*)\1")
+
+
+def _blank_quoted_heredocs(s):
+    """Length- and newline-preserving blanking of QUOTED-delimiter heredoc bodies
+    (<<'EOF' ... EOF): those are pure literal data — no expansions execute inside —
+    so a test file or doc written through one must not trip the guard on strings it
+    merely CONTAINS (the kit's own test suite writes `rm -rf /` fixtures this way).
+    Unquoted-delimiter heredocs are left visible: `$(...)` executes inside them.
+    A missing terminator blanks to the end — which is also what the shell does."""
+    out = s
+    for m in list(_HEREDOC_START.finditer(s)):
+        delim = m.group(2)
+        line_end = out.find("\n", m.end())
+        if line_end == -1:
+            break
+        t = re.compile(r"\n[ \t]*" + re.escape(delim) + r"[ \t]*(?=\n|$)").search(out, line_end)
+        end = t.start() if t else len(out)
+        body = out[line_end + 1:end]
+        out = out[:line_end + 1] + re.sub(r"[^\n]", " ", body) + out[end:]
+    return out
 
 
 def _segments(s):
@@ -105,19 +137,59 @@ TREE_DESTROYERS = [
      "git switch -f/--discard-changes overwrites uncommitted local modifications"),
 ]
 RESTORE = re.compile(r"\bgit\b[^|;&]*\brestore\b([^|;&]*)")
-# (pattern, why, raw_targets): raw_targets=True means match against the rm-target view
-# (bare quoted targets preserved) instead of the fully quote-stripped view — an explicit
-# flag, not a fragile substring check on `why`.
 ALWAYS_DANGEROUS = [
     (re.compile(r"\bgit\b[^|;&]*\bstash\s+(?:drop|clear)\b"),
-     "git stash drop/clear permanently discards stashed work", False),
-    # rm with a recursive flag (-r/-R, combined or separate; -f irrelevant — rm -r
-    # deletes without prompting in non-interactive shells) aimed at a catastrophic
-    # first target: / /* ~ ~/ $HOME . ./ .. ../ *
-    (re.compile(r"\brm\s+(?:-[a-zA-Z]+\s+)*-[a-zA-Z]*[rR][a-zA-Z]*(?:\s+-\S+)*"
-                r"\s+(?:\"|')?(?:/(?:\*)?|~(?:/)?|\$\{?HOME\}?(?:/)?|\.\.?(?:/)?|\*)(?:\"|')?(?:\s|$|;)"),
-     "recursive rm aimed at /, ~, ., .. or * is unrecoverable", True),
+     "git stash drop/clear permanently discards stashed work"),
 ]
+
+# Recursive rm aimed at a catastrophic target. Checked against the rm-target view
+# (bare quoted targets preserved) and — unlike a single anchored regex — token by
+# token, so EVERY argument is a candidate target: `rm -rf build/ /` (the classic
+# stray-space typo) is exactly as blocked as `rm -rf /`. -f is irrelevant: rm -r
+# deletes without prompting in non-interactive shells.
+_RM_INVOCATION = re.compile(r"\b(?:rm|ri|del|erase|remove-item)\s+(.*)", re.IGNORECASE)
+# The recursive-flag grammars of the two shells COLLIDE on spelling (bash `-Rf` vs
+# PowerShell `-Force` both contain an r), so a single regex can't tell them apart
+# without false positives. We know the shell from tool_name, so match per shell:
+#   bash: a combined short flag (single dash + letters) containing r/R — -r,-R,-rf,
+#         -rfvi,-Rfiv — or GNU --recursive. PowerShell words never appear here.
+#   PowerShell: -Recurse and its unambiguous prefixes (-r … -recurse, the only
+#         Remove-Item parameter starting with r), optional :$bool. -Force/-Filter
+#         are NOT recursive.
+_BASH_RECURSIVE = re.compile(r"-[a-zA-Z]*[rR][a-zA-Z]*|--recursive")
+_PS_RECURSIVE = re.compile(
+    r"-r(?:e(?:c(?:u(?:r(?:s(?:e)?)?)?)?)?)?(?::\$?\w+)?|--recursive", re.IGNORECASE)
+# Catastrophic targets: / /* ~ ~/* $HOME ${HOME} . .. * plus Windows spellings —
+# drive roots (C:\ C:/ C:), $env:USERPROFILE, backslash separators. Each target may
+# carry a trailing separator and an optional glob star (~/*, $HOME/*, ./*, C:\*),
+# not just the / root — `rm -rf ~/*` wipes the home dir exactly like `rm -rf ~`.
+_SEP_STAR = r"(?:[/\\]\*?)?"
+_RM_CATASTROPHIC = re.compile(
+    r"[\"']?(?:/\*?|~" + _SEP_STAR + r"|\$\{?HOME\}?" + _SEP_STAR
+    + r"|\$env:USERPROFILE" + _SEP_STAR + r"|[a-z]:" + _SEP_STAR
+    + r"|\.\.?" + _SEP_STAR + r"|\*)[\"']?$",
+    re.IGNORECASE)
+
+
+def _rm_catastrophic(rmseg, is_powershell):
+    """True iff any rm/Remove-Item invocation in this segment slice carries a recursive
+    flag and ANY of its targets is catastrophic. `--` ends option parsing (everything
+    after is a target); parameter values (e.g. -Path C:\\) land in the target list.
+    is_powershell selects the recursive-flag grammar (the two shells collide)."""
+    recursive_flag = _PS_RECURSIVE if is_powershell else _BASH_RECURSIVE
+    for m in _RM_INVOCATION.finditer(rmseg):
+        recursive, opts_ended, targets = False, False, []
+        for t in m.group(1).split():
+            if not opts_ended and t == "--":
+                opts_ended = True
+            elif not opts_ended and len(t) > 1 and t[0] == "-":
+                if recursive_flag.fullmatch(t):
+                    recursive = True
+            else:
+                targets.append(t)
+        if recursive and any(_RM_CATASTROPHIC.fullmatch(t) for t in targets):
+            return True
+    return False
 # --force / -f, plus the refspec spelling of force (`git push origin +main`) —
 # the leading + IS --force for that ref and evades a flag-only check.
 FORCE_PUSH = re.compile(r"\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|\s-f\b|\s\+[A-Za-z0-9_./:~^-])")
@@ -148,11 +220,11 @@ def block(reason):
 
 def _iter_command_slices(text, depth=0):
     """Yield (useg, rmseg) for each command in `text`: top-level segments split on shell
-    separators, and — one nesting level deep — the commands inside each ACTIVE command
-    substitution (`"$(...)"` / backticks / unquoted `$(...)`; single-quoted ones are
-    literal and skipped). `useg` is the quote-stripped view (for git/force/tree patterns),
-    `rmseg` the rm-target view (genuine quoted targets kept). An override-approved
-    top-level segment — and everything inside it — is skipped. Recursion is bounded."""
+    separators, and — recursively, to a bounded depth — the commands inside each ACTIVE
+    command substitution (`"$(...)"` / backticks / unquoted `$(...)`; single-quoted ones
+    are literal and skipped). `useg` is the quote-stripped view (for git/force/tree
+    patterns), `rmseg` the rm-target view (genuine quoted targets kept). An
+    override-approved top-level segment — and everything inside it — is skipped."""
     qb = _blank_quotes(text)
     rmv = _rm_view(text)
     sq = _blank_single_quotes(text)          # view where substitutions are ACTIVE
@@ -168,9 +240,19 @@ def _iter_command_slices(text, depth=0):
 
 
 def main():
+    # Hook payloads are UTF-8 regardless of OS locale; on Windows Python <=3.14 the
+    # default is cp1252, where multi-byte content would crash the read and fail the
+    # guard open — silently disabling it exactly when a session gets interesting.
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     data = json.load(sys.stdin)
-    if data.get("tool_name") != "Bash":
+    tool_name = data.get("tool_name")
+    if tool_name not in ("Bash", "PowerShell"):
         return 0
+    is_powershell = tool_name == "PowerShell"
     tool_input = data.get("tool_input") or {}
     cmd = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
     if not isinstance(cmd, str) or not cmd.strip():
@@ -181,6 +263,7 @@ def main():
     # next — see _segments).
     cmd = re.sub(r"\\\r?\n", " ", cmd).replace("\r\n", "\n").replace("\r", "\n")
     flat = re.sub(r"[^\S\n]+", " ", cmd).strip()
+    flat = _blank_quoted_heredocs(flat)
 
     # The override is a shell env-assignment prefix: it applies ONLY to the command it
     # prefixes, so it exempts only its own segment. Unconditional blocks (rm at a
@@ -188,9 +271,12 @@ def main():
     # only when the working tree is dirty, so they are collected and checked once at the end.
     tree_reason = None
     for useg, rmseg in _iter_command_slices(flat):
-        for pat, why, raw_targets in ALWAYS_DANGEROUS:
-            if pat.search(rmseg if raw_targets else useg):
+        for pat, why in ALWAYS_DANGEROUS:
+            if pat.search(useg):
                 return block(why)
+        if _rm_catastrophic(rmseg, is_powershell):
+            return block("recursive rm aimed at /, ~, $HOME, a drive root, ., .. or * "
+                         "is unrecoverable")
         if FORCE_PUSH.search(useg) and not FORCE_WITH_LEASE.search(useg):
             return block("bare force-push can destroy remote history; use --force-with-lease, "
                          "and only with user approval")

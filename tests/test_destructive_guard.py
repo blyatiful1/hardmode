@@ -211,3 +211,141 @@ def test_non_bash_tool_ignored():
 
 def test_malformed_stdin_fails_open():
     assert run_hook("", raw_stdin="not json").returncode == 0
+
+
+# ---- multi-target and long-form rm (the stray-space catastrophe) ----
+
+def test_catastrophic_rm_blocked_in_any_argument_position(tmp_path):
+    # `rm -rf build/ /` is the canonical accidental-space typo: the FIRST target is
+    # harmless, the second is /. Every argument must be scanned, not just the first.
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("rm -rf build/ /", cwd=repo).returncode == 2
+    assert run_hook("rm -rf ./build /", cwd=repo).returncode == 2
+    assert run_hook("rm -rf src/a src/b ~", cwd=repo).returncode == 2
+
+
+def test_long_form_recursive_rm_blocked(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("rm --recursive --force /", cwd=repo).returncode == 2
+    assert run_hook("rm --recursive /", cwd=repo).returncode == 2
+
+
+def test_scoped_multi_target_rm_allowed(tmp_path):
+    # Multiple SAFE targets must not trip the all-arguments scan.
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("rm -rf build/ dist/ node_modules/", cwd=repo).returncode == 0
+    assert run_hook("rm --recursive build/", cwd=repo).returncode == 0
+
+
+def test_rm_end_of_options_marker_still_blocked(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("rm -rf -- /", cwd=repo).returncode == 2
+
+
+def test_quoted_heredoc_body_is_data_not_commands(tmp_path):
+    # A <<'EOF' heredoc body is literal data (no expansions run inside) — writing a
+    # doc/test that MENTIONS destructive commands must not trip the guard. An
+    # UNQUOTED delimiter is different: $(...) executes inside, so it stays guarded.
+    repo = make_repo(tmp_path, dirty=True)
+    quoted = "cat > notes.md <<'EOF'\nnever run rm -rf / or git reset --hard\nEOF"
+    assert run_hook(quoted, cwd=repo).returncode == 0
+    unquoted = 'cat > x <<EOF\n"$(rm -rf /)"\nEOF'
+    assert run_hook(unquoted, cwd=repo).returncode == 2
+    after = "cat > n.md <<'EOF'\nharmless\nEOF\nrm -rf /"
+    assert run_hook(after, cwd=repo).returncode == 2
+
+
+# ---- PowerShell tool (native-Windows sessions; Windows snippets match Bash|PowerShell) ----
+
+def test_powershell_git_destroyers_guarded(tmp_path):
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook("git reset --hard HEAD~1", cwd=repo, tool_name="PowerShell").returncode == 2
+    assert run_hook("git stash drop", cwd=repo, tool_name="PowerShell").returncode == 2
+    assert run_hook("git push --force origin main", cwd=repo, tool_name="PowerShell").returncode == 2
+    assert run_hook("git push --force-with-lease origin main", cwd=repo,
+                    tool_name="PowerShell").returncode == 0
+
+
+def test_powershell_remove_item_catastrophic_blocked(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("Remove-Item -Recurse -Force C:\\", cwd=repo,
+                    tool_name="PowerShell").returncode == 2
+    assert run_hook("Remove-Item -Path C:\\ -Recurse", cwd=repo,
+                    tool_name="PowerShell").returncode == 2
+    assert run_hook("rm -r -fo ~", cwd=repo, tool_name="PowerShell").returncode == 2
+    assert run_hook("ri -Recurse $env:USERPROFILE", cwd=repo,
+                    tool_name="PowerShell").returncode == 2
+
+
+def test_powershell_scoped_remove_item_allowed(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("Remove-Item -Recurse -Force .\\build", cwd=repo,
+                    tool_name="PowerShell").returncode == 0
+    # -Filter merely CONTAINS an r; it is not a recursive flag.
+    assert run_hook("Remove-Item -Filter *.tmp .\\build", cwd=repo,
+                    tool_name="PowerShell").returncode == 0
+
+
+def test_non_ascii_command_does_not_crash_the_guard(tmp_path):
+    # Payloads are UTF-8; under a legacy-console encoding a non-ASCII command must
+    # neither crash the guard (fail-open would silently disable it) nor be misread.
+    # Bytes stdin + PYTHONIOENCODING simulate the worst-case Windows console.
+    import os
+    repo = make_repo(tmp_path, dirty=False)
+    payload = {"tool_name": "Bash",
+               "tool_input": {"command": "rm -rf / # \U0001f355 löschen"},
+               "cwd": str(repo)}
+    env = dict(os.environ, PYTHONIOENCODING="cp1252")
+    # ensure_ascii=False is load-bearing: with the default (True) the emoji is escaped
+    # to ASCII \uXXXX and the bytes on the wire never stress json.load's decode path,
+    # so the test would pass even with the guard's UTF-8 reconfigure reverted. Sending
+    # the real UTF-8 bytes is what proves the guard did not silently fail open.
+    r = subprocess.run([sys.executable, str(HOOK)],
+                       input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                       capture_output=True, timeout=30, env=env)
+    assert r.returncode == 2
+
+
+# ---- regressions caught by the diff's own adversarial review ----
+
+def test_powershell_force_is_not_a_recursive_flag(tmp_path):
+    # -Force does not recurse; `Remove-Item -Force *` clears a dir's files and must
+    # pass exactly like bash `rm -f *`. The recursive detector must not read the 'r'
+    # in F-o-r-c-e as a recursive short flag.
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("Remove-Item -Force *", cwd=repo, tool_name="PowerShell").returncode == 0
+    assert run_hook("Remove-Item -Force .", cwd=repo, tool_name="PowerShell").returncode == 0
+    assert run_hook("rm -f *", cwd=repo).returncode == 0
+    # -Recurse together with -Force at a catastrophic target still blocks.
+    assert run_hook("Remove-Item -Force -Recurse C:\\", cwd=repo,
+                    tool_name="PowerShell").returncode == 2
+
+
+def test_long_combined_short_recursive_flags_still_block(tmp_path):
+    # `rm -rfvi /` / `rm -Rfiv /` are recursive deletes of root with 3+ letters after
+    # r — a bounded {0,2} matcher regressed these to ALLOW. Every combined short flag
+    # containing r/R must count.
+    repo = make_repo(tmp_path, dirty=False)
+    for cmd in ("rm -rfvi /", "rm -Rfiv /", "rm -rfvd /", "rm -fvir /"):
+        assert run_hook(cmd, cwd=repo).returncode == 2, cmd
+
+
+def test_powershell_recurse_switch_syntax_blocks(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    assert run_hook("Remove-Item -Recurse:$true C:\\", cwd=repo,
+                    tool_name="PowerShell").returncode == 2
+    assert run_hook("Remove-Item -rec C:\\", cwd=repo, tool_name="PowerShell").returncode == 2
+
+
+def test_catastrophic_glob_of_home_and_roots_blocks(tmp_path):
+    # `rm -rf ~/*` / `$HOME/*` / `./*` wipe the same tree as the bare target; the glob
+    # form of every catastrophic target must block, not only `/*`.
+    repo = make_repo(tmp_path, dirty=False)
+    for cmd in ("rm -rf ~/*", "rm -rf $HOME/*", "rm -rf ${HOME}/*", "rm -rf ./*", "rm -rf ../*"):
+        assert run_hook(cmd, cwd=repo).returncode == 2, cmd
+    assert run_hook("Remove-Item -Recurse C:\\*", cwd=repo, tool_name="PowerShell").returncode == 2
+    assert run_hook("Remove-Item -Recurse $env:USERPROFILE\\*", cwd=repo,
+                    tool_name="PowerShell").returncode == 2
+    # A glob of a NON-catastrophic dir stays allowed.
+    assert run_hook("rm -rf ~/projects/*", cwd=repo).returncode == 0
+    assert run_hook("rm -rf build/*", cwd=repo).returncode == 0

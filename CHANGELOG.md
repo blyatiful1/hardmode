@@ -1,5 +1,105 @@
 # Changelog
 
+## v2.1 — 2026-07-16
+
+Adversarial re-audit. A 52-agent finder/verifier fleet plus manual review turned the kit
+on itself again, this time targeting the Windows port and the enforcement layer's
+data-dependent silent-failure modes. Two findings set the tone: on native Windows the
+flagship claim-audit gate and compaction recovery were provably inert whenever a transcript
+held an emoji (cp1252 default → UnicodeError → the fail-open wrapper silently DISABLED the
+hook), and the machine this audit ran on had been executing 3-days-stale hooks under a fully
+green doctor report. Both are now closed with tests. Suite: 219 passed, 23 skipped on native
+Windows (baseline before: 6 failures); ~34 new regression tests.
+
+This entry also folds in four destructive-guard commits that landed after the v2.0 changelog
+was written but were never logged (all 2026-07-12): per-segment override scoping + a
+CLAUDE_DIR docs fix (`93144a1`), regressions caught by adversarial self-review of that diff
+(`58a6f0f`), newline segments / command-substitution scanning / an `rm` false-positive
+(`9e07520`), and coherent substitution scanning — single-quote handling, inner separators,
+`${HOME}` (`d79c529`).
+
+### Fixed — enforcement layer (Windows made the "deterministic" hooks data-dependently inert)
+- **UTF-8 systemic fix.** Every hook now reconfigures stdio to utf-8/`replace` and opens
+  transcripts and state files with an explicit encoding. Before, an emoji in a transcript or
+  payload crashed the read on Windows Python ≤3.14 (cp1252 default) and the fail-open wrapper
+  silently DISABLED the hook — so the claim-audit gate and compaction recovery were inert on
+  native Windows exactly when a session got interesting.
+- **PowerShell tool coverage.** The Windows snippets now match `Bash|PowerShell` on the
+  destructive guard (PreToolUse) and the loop alarm (both `PostToolUse` and
+  `PostToolUseFailure`); the claim-audit gate counts PowerShell `tool_use` file-writes
+  (Set-Content/Out-File/…, with `> $null` correctly NOT a write) and the loop alarm tracks
+  PowerShell command grind. On native Windows the PRIMARY shell tool was previously entirely
+  unguarded. POSIX snippets are unchanged (deliberate divergence, parity-tested).
+- **Destructive-guard `rm` check rebuilt.** ALL arguments are scanned, not just the first
+  (`rm -rf build/ /` — the stray-space typo — now blocks), plus long-form flags
+  (`--recursive`), the PowerShell spellings (Remove-Item/ri/del, `-Recurse` + prefix
+  abbreviations), Windows targets (drive roots `C:\`, `$env:USERPROFILE`, backslash forms),
+  and `--` end-of-options. Quoted-delimiter heredoc bodies (`<<'EOF'`) are blanked as literal
+  data so docs/tests that MENTION `rm -rf /` no longer false-block; unquoted-delimiter
+  heredocs stay visible (`$(…)` executes inside). The previously documented nested `$($(…))`
+  residual was REFUTED by testing (bounded-depth recursion catches it) and removed from Known
+  limits; still-true residuals: `sh -c`/`eval` wrapping, variable-assembled flags, process
+  substitution `<(…)`, xargs-fed targets.
+- **Claim-audit gate: suite-claim negations.** "Not all tests pass yet" / "no checks are
+  green" no longer false-block (they contain the positive substring "all tests pass").
+- **Loop-alarm nudge wording is now threshold-agnostic** ("Another identical attempt…"),
+  matching `FABLE_LOOP_THRESHOLD=2` on the small tier; the doctrine line tracks it.
+
+### Fixed — fable-mem
+- **`mem.py` upsert is now atomic** (INSERT … ON CONFLICT DO UPDATE): two SessionEnd
+  reindexes closing near-simultaneously no longer crash the loser with a UNIQUE-constraint
+  IntegrityError.
+- **Recall relevance gate is token-boundary, not substring** ("run" no longer matches inside
+  "runbook") in both the recall hook and `mem.py`'s degraded search; the recall keyword-count
+  knob is renamed **`FABLE_MEM_MIN_OVERLAP`**, decoupled from `mem.py`'s bm25-scale
+  `FABLE_MEM_MIN_SCORE` — they were the same env var, so tuning recall silently reconfigured
+  (and could blank out) CLI search on an incompatible scale.
+- **UTF-8 hygiene** across all three mem hooks.
+
+### Changed — workflows (three-way honesty)
+- **paranoid-review** returns `unauditedDimensions` when a finder dies (an unreviewed lens
+  must never read as clean). **bug-hunt** returns dead-lens / coverage info and its dedup key
+  now includes the line number (two different bugs with similar titles in one file no longer
+  collide). **big-task** requires the implementer to return a commit hash and then
+  INDEPENDENTLY verifies the commit landed (clean tree + matching HEAD subject) before a step
+  counts green. **memory-gc**'s judge fan-out is capped (30, logged) and budget-guarded, with
+  over-cap / budget-skipped pairs surfaced UNVERIFIED rather than dropped.
+- **check-workflows.mjs** strips string literals and comments before the
+  `Date.now()`/`Math.random()`/`new Date()` determinism ban, so a prompt that merely names
+  those anti-patterns no longer false-fails (real code inside `${…}` interpolations is still
+  scanned).
+
+### Fixed — installers, doctors, bench
+- **`install.ps1` + `doctor.ps1` now carry a UTF-8 BOM.** Without it, Windows PowerShell 5.1
+  (the ONLY PowerShell on stock Windows) `ParserError`'d on the BOM-less em-dash scripts via
+  `powershell -File` — the exact documented install command — so the README's install was
+  completely broken on vanilla Windows (CI had only tested pwsh). CI gains a `shell: powershell`
+  5.1 `-File` step, and the test suite falls back to `powershell.exe` when `pwsh` is absent.
+- **Both doctors now do event-level wiring checks** (a partial merge dropping the loop alarm's
+  `PostToolUseFailure` block is caught; the widened `Bash|PowerShell` matcher is accepted),
+  gained a **staleness check** (installed `~/.claude` copies compared CRLF-normalized and
+  agent-model-pin-aware against the repo; drift → warn — motivated by the live 3-days-stale
+  hooks under a green doctor report), and `doctor.sh` gained the wrong-interpreter check (a
+  Windows `python` snippet merged on POSIX).
+- **bench:** `score.py` inherits `os.environ` (incl. `SYSTEMROOT` — fixes WinError 10106)
+  while still pinning PATH/HOME, and is now plugin-hermetic
+  (`PYTEST_DISABLE_PLUGIN_AUTOLOAD=1`); `run.sh` detects `.venv/bin` vs `.venv/Scripts`;
+  `score.py`'s NEGATED regex stays synced with the Stop-hook gate (test-enforced); RESULTS.md's
+  aggregate cost sentence now names its baselines.
+
+### Changed — agents, skills, docs honesty
+- **`verifier.md`** step 1 now derives the changed surface itself via `git status`/`git diff`
+  instead of trusting the caller's file list — an omitted file is exactly where a false green
+  hides.
+- Small-tier snippet comments no longer call `effortLevel` "an Opus-family knob": Sonnet 5 is
+  adaptive-thinking and honors it.
+- Docs made truthful again against the code: README Known-limits (destructive guard, Windows
+  port, UTF-8), the Windows-notes block (PowerShell matcher divergence, PS 5.1/BOM,
+  `powershell.exe` fallback), and the changed "What's inside" annotations (guard, both doctors,
+  bench, workflow return fields); SUCCESSION.md's `effortLevel` config-delta; the fable skill's
+  Stage 0 (nonexistent `TaskCreate` → an explicit TodoWrite/numbered task list); the webdesign
+  skill's W3 screenshot widths (360 → 320, matching its own reflow invariant).
+
 ## v2.0 — 2026-07-12
 
 Self-audit pass. The kit was turned on itself: a multi-agent audit swept every subsystem
