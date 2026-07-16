@@ -86,7 +86,7 @@ def test_unknown_flag_fails_loudly(tmp_path):
 
 def test_big_task_workflow_shipped_and_referenced():
     assert (REPO / "claude/workflows/big-task.js").exists()
-    readme = (REPO / "README.md").read_text()
+    readme = (REPO / "README.md").read_text(encoding="utf-8")
     assert "/big-task" in readme
     assert "ultracode" in readme, "README must document the ultracode composition story"
     skill = (REPO / "claude/skills/orchestrate/SKILL.md").read_text()

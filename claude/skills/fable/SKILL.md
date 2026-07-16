@@ -11,7 +11,7 @@ adversarial checking at every stage boundary, and evidence for every claim. Do n
 stages because you feel confident — feeling confident is not evidence.
 
 ## Stage 0 — Frame (always)
-1. Restate the task in one sentence. List EVERY deliverable it implies as a task list (TaskCreate) — including the implicit ones (tests pass, docs updated, nothing else broken).
+1. Restate the task in one sentence. List EVERY deliverable it implies as an explicit task list (TodoWrite where available, else a numbered list you re-read before finishing) — including the implicit ones (tests pass, docs updated, nothing else broken).
 2. Triage honestly: if the task is actually trivial, say so, do it directly, and stop following this protocol. Stakes decide depth.
 
 ## Stage 1 — Explore before planning

@@ -16,6 +16,14 @@ ok()   { echo "  ok:   $1"; }
 bad()  { echo "  FAIL: $1"; fail=1; }
 warn() { echo "  warn: $1"; }
 
+# crlf_same <a> <b> — content-equal after normalizing CRLF/LF (autocrlf makes the
+# installed copy and the repo checkout differ on line endings without real drift;
+# install.ps1 also rewrites agents to LF). Reports staleness as a warn, not a FAIL.
+crlf_same() { [ -f "$2" ] && cmp -s <(tr -d '\r' <"$1") <(tr -d '\r' <"$2"); }
+# agent_same — like crlf_same but also ignores an installer-injected `model:`
+# frontmatter pin (--strong-model), so a pinned install is not misreported as drift.
+agent_same() { [ -f "$2" ] && cmp -s <(sed '/^model: /d' "$1" | tr -d '\r') <(sed '/^model: /d' "$2" | tr -d '\r'); }
+
 echo "fable-protocol doctor — checking $DST"
 
 # 0. Claude Code version — saved workflows (/paranoid-review etc.) need >= 2.1.154.
@@ -50,19 +58,31 @@ for f in "$SRC"/hooks/*.py; do
     warn "hook present but compile-unchecked (no python3): $(basename "$f")"
   elif ! python3 -m py_compile "$t" 2>/dev/null; then
     bad "hook does not compile: $t"
-  elif ! cmp -s "$f" "$t"; then
-    warn "hook differs from this repo checkout: $t (older kit version?)"
+  elif ! crlf_same "$f" "$t"; then
+    warn "hook differs from this repo checkout: $t (older kit version? re-run ./install.sh)"
   else
     ok "hook: $(basename "$f")"
   fi
 done
 for f in "$SRC"/agents/*.md; do
-  [ -f "$DST/agents/$(basename "$f")" ] && ok "agent: $(basename "$f")" \
-    || bad "agent missing: $DST/agents/$(basename "$f")"
+  t="$DST/agents/$(basename "$f")"
+  if [ ! -f "$t" ]; then
+    bad "agent missing: $t"
+  elif ! agent_same "$f" "$t"; then
+    warn "agent differs from this repo checkout: $t (re-run ./install.sh)"
+  else
+    ok "agent: $(basename "$f")"
+  fi
 done
 for f in "$SRC"/workflows/*.js; do
-  [ -f "$DST/workflows/$(basename "$f")" ] && ok "workflow: /$(basename "$f" .js)" \
-    || bad "workflow missing: $DST/workflows/$(basename "$f")"
+  t="$DST/workflows/$(basename "$f")"
+  if [ ! -f "$t" ]; then
+    bad "workflow missing: $t"
+  elif ! crlf_same "$f" "$t"; then
+    warn "workflow differs from this repo checkout: $t (re-run ./install.sh)"
+  else
+    ok "workflow: /$(basename "$f" .js)"
+  fi
 done
 for d in "$SRC"/skills/*/; do
   name="$(basename "$d")"; complete=1; drifted=0
@@ -70,8 +90,8 @@ for d in "$SRC"/skills/*/; do
     rel="${f#"${d%/}"/}"
     if [ ! -f "$DST/skills/$name/$rel" ]; then
       bad "skill file missing: $DST/skills/$name/$rel"; complete=0
-    elif ! cmp -s "$f" "$DST/skills/$name/$rel"; then
-      warn "skill file differs from this repo checkout: $DST/skills/$name/$rel (older kit version?)"; drifted=1
+    elif ! crlf_same "$f" "$DST/skills/$name/$rel"; then
+      warn "skill file differs from this repo checkout: $DST/skills/$name/$rel (older kit version? re-run ./install.sh)"; drifted=1
     fi
   done < <(find "${d%/}" -type f -print0)
   [ "$complete" -eq 1 ] && [ "$drifted" -eq 0 ] && ok "skill: $name"
@@ -98,6 +118,7 @@ else
   else
     bad "mem CLI self-check failed: CLAUDE_DIR=$DST python3 $MEM doctor"
   fi
+  crlf_same "$SRC/cli/mem.py" "$MEM" || warn "mem CLI differs from this repo checkout: $MEM (re-run ./install.sh)"
 fi
 
 # Memory corpus dir writable + privacy pattern seed present.
@@ -136,14 +157,55 @@ elif ! python3 -c "import json,sys; json.load(open(sys.argv[1]))" "$SETTINGS" 2>
   bad "settings.json is not valid JSON — Claude Code will ignore it"
 else
   ok "settings.json parses"
-  for f in "$SRC"/hooks/*.py; do
-    name="$(basename "$f")"
-    if grep -q "$name" "$SETTINGS"; then
-      ok "wired: $name"
-    else
-      bad "NOT wired in settings.json: $name (merge the snippet from install.sh)"
-    fi
-  done
+  # Event-level wiring: a bare substring test of the filename cannot tell a hook
+  # wired to the WRONG event, nor a partial merge that dropped one block of a
+  # multi-event hook (e.g. the loop alarm's PostToolUseFailure) from a correct one.
+  # Compare each hook's presence PER EVENT against the shipped snippet's own event
+  # map (matcher-agnostic, so a widened Bash|PowerShell matcher is accepted), and
+  # flag the wrong-interpreter mistake: the Windows snippet's bare `python` commands
+  # merged on a POSIX box are hooks that never fire (mirror of doctor.ps1's guard).
+  wiring="$(python3 - "$SRC/settings/settings-snippet.json" "$SETTINGS" <<'PY'
+import json, sys
+
+def event_map(obj):
+    m = {}
+    for event, groups in (obj.get("hooks") or {}).items():
+        for group in groups or []:
+            for h in group.get("hooks") or []:
+                name = (h.get("command") or "").rstrip().split("/")[-1]
+                if name:
+                    m.setdefault(event, set()).add(name)
+    return m
+
+expected = event_map(json.load(open(sys.argv[1])))
+settings = json.load(open(sys.argv[2]))
+actual = event_map(settings)
+fail = 0
+for event in sorted(expected):
+    for name in sorted(expected[event]):
+        if name in actual.get(event, set()):
+            print(f"ok\twired: {name} [{event}]")
+        else:
+            print(f"bad\tNOT wired under {event} in settings.json: {name} (merge the snippet from install.sh)")
+            fail = 1
+for groups in (settings.get("hooks") or {}).values():
+    for group in groups or []:
+        for h in group.get("hooks") or []:
+            if ((h.get("command") or "").split()[:1] == ["python"]):
+                print("warn\tsettings.json invokes bare 'python' (the WINDOWS snippet) - most POSIX boxes have only 'python3', so those hooks are inert; merge settings-snippet.json instead")
+                raise SystemExit(fail)
+raise SystemExit(fail)
+PY
+)"
+  wrc=$?
+  while IFS=$'\t' read -r kind msg; do
+    case "$kind" in
+      ok)   ok "$msg" ;;
+      bad)  bad "$msg" ;;
+      warn) warn "$msg" ;;
+    esac
+  done <<< "$wiring"
+  [ "$wrc" -eq 0 ] || fail=1
   if python3 -c "
 import json,sys
 s = json.load(open(sys.argv[1]))

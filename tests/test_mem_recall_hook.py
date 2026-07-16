@@ -34,9 +34,12 @@ def build_index(claude_dir):
     return r
 
 
-def run_hook(claude_dir, state_dir, prompt="", session="s1", raw_stdin=None):
+def run_hook(claude_dir, state_dir, prompt="", session="s1", raw_stdin=None,
+             env_extra=None):
     payload = {"prompt": prompt, "session_id": session}
     env = dict(os.environ, CLAUDE_DIR=str(claude_dir), FABLE_STATE_DIR=str(state_dir))
+    if env_extra:
+        env.update(env_extra)
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=raw_stdin if raw_stdin is not None else json.dumps(payload),
@@ -179,3 +182,63 @@ def test_malformed_stdin_fails_open(tmp_path):
     r = run_hook(tmp_path, tmp_path / "state", raw_stdin="not json")
     assert r.returncode == 0
     assert r.stdout.strip() == ""
+
+
+def test_substring_coincidence_stays_silent(tmp_path):
+    # The relevance gate must count whole-token overlap, not substring containment.
+    # Prompt keywords run/test only substring-match runbook/latest; that used to inflate
+    # the overlap past the >=2 gate and surface this unrelated memory. Only "suite"
+    # genuinely matches (overlap 1) => the gate must drop it.
+    gdir = Path(tmp_path) / "memory"
+    write_memory(gdir, "runbook.md", "Latest runbook",
+                 "suite of latest tools and runbook procedures", body=BODY_SENTINEL)
+    build_index(tmp_path)
+    r = run_hook(tmp_path, tmp_path / "state", "run the test suite")
+    assert r.returncode == 0, r.stderr
+    assert injected_context(r) is None
+
+
+def test_min_overlap_env_knob_tightens_the_gate(tmp_path):
+    # FABLE_MEM_MIN_OVERLAP raises the required keyword-overlap count; an otherwise
+    # surfacing prompt goes silent when the gate is set above any hit's overlap.
+    seed_pooling_corpus(tmp_path, n=3)
+    r = run_hook(tmp_path, tmp_path / "state", POOLING_PROMPT,
+                 env_extra={"FABLE_MEM_MIN_OVERLAP": "99"})
+    assert r.returncode == 0, r.stderr
+    assert injected_context(r) is None  # nothing clears an overlap of 99
+
+
+def test_min_score_env_does_not_affect_recall(tmp_path):
+    # FABLE_MEM_MIN_SCORE is mem.py search's bm25-scale knob, NOT the recall gate. It
+    # used to be the SAME var: a huge value made the recall gate need 99 overlaps and
+    # blanked recall. Now recall ignores it and still surfaces.
+    seed_pooling_corpus(tmp_path, n=3)
+    r = run_hook(tmp_path, tmp_path / "state", POOLING_PROMPT,
+                 env_extra={"FABLE_MEM_MIN_SCORE": "99"})
+    assert r.returncode == 0, r.stderr
+    assert injected_context(r) is not None  # recall decoupled from the CLI score knob
+
+
+def test_non_ascii_prompt_recalls_under_ascii_locale(tmp_path):
+    # With the child's stdio forced to ASCII, a UTF-8 prompt must still be decoded (the
+    # hook reconfigures stdin/stdout to utf-8) — old cp1252/ascii defaults would
+    # UnicodeError and fail the hook open, silently dropping recall.
+    gdir = Path(tmp_path) / "memory"
+    write_memory(gdir, "cafe.md", "Café menu decision",
+                 "localización 日本語 café notes", body=BODY_SENTINEL)
+    build_index(tmp_path)
+    payload = {"prompt": "café 日本語 localización", "session_id": "s1"}
+    env = dict(os.environ, CLAUDE_DIR=str(tmp_path),
+               FABLE_STATE_DIR=str(tmp_path / "state"), PYTHONIOENCODING="ascii")
+    r = subprocess.run(
+        [sys.executable, str(HOOK)],
+        # ensure_ascii=False so raw UTF-8 bytes hit the wire (the default escapes them to
+        # \uXXXX, which is pure ASCII and would not exercise the decode path at all).
+        input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        capture_output=True, timeout=30, env=env,
+    )
+    assert r.returncode == 0, r.stderr
+    out = r.stdout.decode("utf-8", "replace").strip()
+    assert out, "expected injected pointers under an ascii locale"
+    ctx = json.loads(out)["hookSpecificOutput"]["additionalContext"]
+    assert "cafe.md" in ctx

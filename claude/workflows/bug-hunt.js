@@ -61,10 +61,17 @@ const seen = new Set()
 const confirmed = []
 const refuted = []
 const unverified = []
-const key = b => `${b.file}:${(b.title || '').toLowerCase().slice(0, 60)}`
+// Key includes the line: two DIFFERENT bugs in the same file with similar titles
+// must not collide, or the second is silently dropped from verify + report (matches
+// paranoid-review.js's dedupKey, which includes f.line for the same reason).
+const key = b => `${b.file}:${b.line ?? ''}:${(b.title || '').toLowerCase().slice(0, 60)}`
 
 let dry = 0
 let stoppedForBudget = false
+// A dead hunter is not a passing check: count every null lens invocation so partial
+// (not just whole-round) deaths stay VISIBLE in the returned object, not only in logs.
+let deadHunterInvocations = 0
+const deadLenses = new Set()
 for (let round = 0; round < MAX_ROUNDS && dry < 2; round++) {
   if (budget.total && budget.remaining() < 40_000) { log('token budget nearly spent — stopping early'); stoppedForBudget = true; break }
   phase('Hunt')
@@ -82,6 +89,11 @@ ${alreadyFound ? `Already found (do NOT re-report these): ${alreadyFound}` : ''}
   ))
   // A round of dead hunters is not a clean round — a dead subagent is not a passing check.
   if (results.every(r => r == null)) { log(`round ${round + 1}: ALL hunters died — round does not count as dry`); continue }
+  // A PARTIAL death (some lenses null) silently loses that lens's coverage for the round;
+  // record which lenses died so it is not swallowed (visible in the returned object).
+  results.forEach((r, i) => { if (r == null) { deadHunterInvocations++; deadLenses.add(roundLenses[i][0]) } })
+  const deadThisRound = results.filter(r => r == null).length
+  if (deadThisRound) log(`round ${round + 1}: ${deadThisRound} of ${results.length} hunter lens(es) died — their coverage this round is missing`)
   const found = results.filter(Boolean).flatMap(r => r.bugs)
 
   const fresh = found.filter(b => !seen.has(key(b)))
@@ -119,4 +131,8 @@ return {
   refuted: refuted.map(({ verdict, ...b }) => ({ ...b, refutation: verdict.reason })),
   unverified: unverified.sort(bySeverity).map(({ verdict, ...b }) => ({ ...b, note: verdict?.reason ?? 'verifier did not return' })),
   totalFound: seen.size,
+  // Three-way honesty: a dead hunter is not a clean sweep. Non-empty deadLenses means
+  // some lens's coverage was lost and the "done" line above overstates completeness.
+  deadHunterInvocations,
+  deadLenses: [...deadLenses],
 }

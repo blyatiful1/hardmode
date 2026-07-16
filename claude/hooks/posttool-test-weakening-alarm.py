@@ -99,6 +99,14 @@ def added_markers(tool, tool_input):
 
 
 def main():
+    # Payloads are UTF-8 regardless of OS locale; on Windows Python <=3.14 the
+    # cp1252 default would crash on multi-byte edit content and fail the alarm
+    # open — silently disabling it (CONF-UTF8).
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     data = json.load(sys.stdin)
     tool = data.get("tool_name", "")
     if tool not in ("Edit", "Write"):
@@ -117,7 +125,7 @@ def main():
     prune_stale(d)
     state_path = os.path.join(d, f"weakening-alarm-{session}.json")
     try:
-        with open(state_path) as f:
+        with open(state_path, encoding="utf-8") as f:
             nudged = json.load(f)
         if not isinstance(nudged, list):
             nudged = []
@@ -127,7 +135,7 @@ def main():
         return 0
     nudged.append(path)
     tmp = state_path + ".tmp"
-    with open(tmp, "w") as f:
+    with open(tmp, "w", encoding="utf-8") as f:
         json.dump(nudged, f)
     os.replace(tmp, state_path)
     print(NUDGE.format(path=path), file=sys.stderr)

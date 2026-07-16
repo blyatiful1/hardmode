@@ -128,6 +128,26 @@ def test_malformed_stdin_fails_open(tmp_path):
     assert r.returncode == 0
 
 
+def test_non_ascii_content_still_blocks_under_ascii_locale(tmp_path):
+    # With the child's stdio forced to ASCII, a marker inside UTF-8 content must still be
+    # decoded and BLOCKED. Old cp1252/ascii defaults would UnicodeError on the multi-byte
+    # content, the guard would fail OPEN (exit 0) — silently ALLOWING the leak it exists
+    # to stop. The hook reconfigures stdin/stderr to utf-8 before reading.
+    write_privacy(tmp_path, ["ACME-*"])
+    payload = {"tool_name": "Write", "tool_input": {
+        "file_path": str(corpus_file(tmp_path, "leak.md")),
+        "content": "café notes — ACME-1234 leak — localización 日本語"}}
+    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), PYTHONIOENCODING="ascii")
+    r = subprocess.run(
+        [sys.executable, str(HOOK)],
+        # ensure_ascii=False so raw UTF-8 bytes hit the wire (the default escapes them to
+        # \uXXXX, which is pure ASCII and would not exercise the decode path at all).
+        input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        capture_output=True, timeout=30, env=env,
+    )
+    assert r.returncode == 2, r.stderr
+
+
 def test_base_honors_claude_dir(tmp_path):
     # privacy.toml + the blocking decision are read from CLAUDE_DIR. The SAME
     # payload blocks under a base that has the config, and is allowed under a base

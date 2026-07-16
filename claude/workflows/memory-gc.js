@@ -74,7 +74,20 @@ const VERDICT = {
 
 // ---- Judge: contradiction judges over same-topic pairs (unverified != refuted) ----
 phase('Judge')
-const judged = topicPairs.length ? (await parallel(topicPairs.map((pair, i) => () =>
+// The scan's same_topic_pairs is an uncapped O(N^2) list; a stale corpus can produce
+// dozens-to-hundreds. Cap the xhigh fan-out AND stop on low budget (consistent with
+// bug-hunt.js). Over-cap / budget-skipped pairs are NOT silently dropped — they surface
+// below as unverified (fail toward human review), the same as a dead judge.
+const MAX_JUDGE_PAIRS = 30
+const budgetLow = !!(budget.total && budget.remaining() < 40_000)
+let judgePairs = topicPairs.slice(0, MAX_JUDGE_PAIRS)
+if (budgetLow) {
+  log(`token budget nearly spent — skipping ${topicPairs.length} contradiction judge(s); pairs surfaced UNVERIFIED for human review`)
+  judgePairs = []
+} else if (topicPairs.length > MAX_JUDGE_PAIRS) {
+  log(`same-topic pairs capped at ${MAX_JUDGE_PAIRS} for the xhigh judge fan-out — ${topicPairs.length - MAX_JUDGE_PAIRS} pair(s) surfaced UNVERIFIED; re-run /memory-gc to cover them`)
+}
+const judged = judgePairs.length ? (await parallel(judgePairs.map((pair, i) => () =>
   agent(
     `Two cross-project memories were flagged as same-topic. Judge whether they CONTRADICT each other. ${BASE_HINT}
 
@@ -90,12 +103,21 @@ verdict=confirmed ONLY for a real contradiction — quote the two conflicting cl
 // A dead judge is not a "no contradiction" — count it unverified, fail toward review.
 ))) : []
 
-const pairResult = judged.map((r, i) => ({
-  pair: r?.pair ?? topicPairs[i],
-  verdict: (r && r.verdict && r.verdict.verdict) ? r.verdict.verdict : 'unverified',
-  conflict: r?.verdict?.conflict ?? 'judge did not return — treated as unverified, not safe',
-  olderPath: r?.verdict?.olderPath ?? null,
-}))
+// Map over ALL topicPairs, not just the judged prefix: a pair skipped for cap/budget is
+// unverified (surfaced for review), never dropped. judged aligns by index with judgePairs.
+const pairResult = topicPairs.map((pair, i) => {
+  const r = i < judgePairs.length ? judged[i] : null
+  const judgedThisRun = i < judgePairs.length
+  const notJudgedReason = budgetLow
+    ? 'not judged — token budget nearly spent; re-run /memory-gc to cover this pair'
+    : 'not judged — same-topic pair cap reached; re-run /memory-gc to cover this pair'
+  return {
+    pair: r?.pair ?? pair,
+    verdict: (r && r.verdict && r.verdict.verdict) ? r.verdict.verdict : 'unverified',
+    conflict: r?.verdict?.conflict ?? (judgedThisRun ? 'judge did not return — treated as unverified, not safe' : notJudgedReason),
+    olderPath: r?.verdict?.olderPath ?? null,
+  }
+})
 const contradictions = pairResult.filter(p => p.verdict === 'confirmed')
 const unresolvedPairs = pairResult.filter(p => p.verdict === 'unverified')
 log(`contradiction judges: ${contradictions.length} confirmed, ${pairResult.filter(p => p.verdict === 'refuted').length} refuted, ${unresolvedPairs.length} unverified`)

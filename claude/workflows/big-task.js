@@ -75,6 +75,29 @@ const VERDICT = {
   required: ['verdict', 'evidence', 'problems'],
 }
 
+// The commit agent must return the actual hash and whether it committed — free text
+// "done" is not proof a commit happened (a pre-commit hook or empty stage silently
+// fails it). An independent check then confirms it against real git state.
+const COMMIT = {
+  type: 'object',
+  properties: {
+    committed: { type: 'boolean', description: 'true ONLY if git commit actually created a commit' },
+    hash: { type: 'string', description: 'The new commit hash (git rev-parse HEAD after committing)' },
+    error: { type: 'string', description: 'The exact error if the commit did not happen (e.g. nothing staged, hook rejected)' },
+  },
+  required: ['committed'],
+}
+
+const COMMIT_CHECK = {
+  type: 'object',
+  properties: {
+    clean: { type: 'boolean', description: 'git status --porcelain produced NO output (working tree fully committed)' },
+    headMatches: { type: 'boolean', description: 'HEAD commit subject is exactly the expected step message' },
+    head: { type: 'string', description: 'git rev-parse HEAD' },
+  },
+  required: ['clean', 'headMatches'],
+}
+
 // ---- Decompose ----
 phase('Decompose')
 const planPrompt = `Decompose this task into the smallest coherent, ORDERED implementation steps for the repository at the current working directory.
@@ -173,13 +196,32 @@ verdict=pass ONLY if both checks pass under your own execution AND the diff genu
 
   // Checkpoint: small models drift furthest between checkpoints, so every green step
   // becomes a commit before the next step starts.
+  const stepMessage = `big-task step ${i + 1}/${plan.steps.length}: ${step.goal}`
   const commit = await agent(
     `In the repository at the current working directory, commit ALL current changes as one checkpoint commit. Run: git add -A, then commit with exactly this message (no attribution lines):
-big-task step ${i + 1}/${plan.steps.length}: ${step.goal}
+${stepMessage}
 Return the commit hash, or the exact error if the commit fails (nothing staged counts as an error — say so).`,
-    { label: `commit:${i + 1}`, phase: 'Execute', effort: 'low' }
+    { label: `commit:${i + 1}`, phase: 'Execute', effort: 'low', schema: COMMIT }
   )
-  done.push({ step: i + 1, goal: step.goal, evidence: v.evidence, commit: commit ?? 'COMMIT AGENT DIED — checkpoint may be uncommitted, check git log' })
+  // Do NOT trust the commit agent's self-report: a silently-failed commit reported as
+  // success would count as a checkpoint and the next step's work would mix into the same
+  // dirty tree (making the halt message's "prior checkpoints are committed" a lie). An
+  // independent check confirms the commit landed against real git state before advancing.
+  const check = await agent(
+    `In the repository at the current working directory, verify the previous step was actually committed — do NOT commit or change anything yourself.
+Run: git status --porcelain (clean=true ONLY if it prints nothing) and git log -1 --format=%s (headMatches=true ONLY if that subject line is exactly: ${stepMessage}). Also return git rev-parse HEAD as head.`,
+    { label: `commit-check:${i + 1}`, phase: 'Execute', effort: 'low', schema: COMMIT_CHECK }
+  )
+  if (!check || !check.clean || !check.headMatches) {
+    const reason = 'commit not verified — working tree is not clean or HEAD does not match the step commit (checkpoint NOT safely committed)'
+    const detail = check
+      ? `git state after commit: clean=${check.clean}, headMatches=${check.headMatches}${commit?.error ? `; commit agent error: ${commit.error}` : ''}`
+      : 'commit-check agent died — commit status unknown'
+    halted = { step: i + 1, goal: step.goal, reason, problems: [detail], evidence: v.evidence }
+    log(`step ${n} halting (${reason}). Prior checkpoints remain committed; THIS step's work is uncommitted in the working tree.`)
+    break
+  }
+  done.push({ step: i + 1, goal: step.goal, evidence: v.evidence, commit: check.head ?? commit?.hash ?? '(hash unavailable)' })
   log(`step ${n} verified and committed`)
 }
 

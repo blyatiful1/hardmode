@@ -61,6 +61,11 @@ const seen = new Set()
 // same file:line must not collide (the collision silently dropped the second one).
 const dedupKey = f => `${f.file}:${f.line ?? ''}:${(f.title || '').toLowerCase().slice(0, 50)}`
 
+// A dead finder leaves its whole dimension UNREVIEWED; track it so the returned object
+// (not only the live log) shows the coverage gap — an unreviewed dimension must never
+// read the same as one reviewed and found clean.
+const unauditedDimensions = []
+
 phase('Find')
 const results = await pipeline(
   DIMENSIONS,
@@ -73,7 +78,7 @@ Report EVERY real issue you find regardless of severity — a separate verificat
   ),
   (r, [key]) => {
     // A dead finder must be visible, not read as "dimension found nothing clean".
-    if (r == null) { log(`find:${key}: FINDER DIED — this dimension is UNREVIEWED`); return [] }
+    if (r == null) { unauditedDimensions.push(key); log(`find:${key}: FINDER DIED — this dimension is UNREVIEWED`); return [] }
     if (budget.total && budget.remaining() < 30_000) {
       // Still dedup on the budget path, or the same defect surfaces twice — once
       // confirmed by an earlier dimension, once unverified here (CONF20).
@@ -108,4 +113,7 @@ return {
   confirmed: confirmed.map(({ verdict, ...f }) => ({ ...f, evidence: verdict.reason })),
   refuted: refuted.map(({ verdict, ...f }) => ({ ...f, refutation: verdict.reason })),
   unverified: unverified.map(({ verdict, ...f }) => ({ ...f, note: verdict?.reason ?? 'verifier did not return' })),
+  // Coverage honesty: dimensions whose finder died were NOT reviewed. A non-empty list
+  // means the clean-looking confirmed/refuted/unverified above is missing these lenses.
+  unauditedDimensions,
 }

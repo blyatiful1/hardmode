@@ -49,6 +49,14 @@ def run(cmd, cwd):
 
 
 def main():
+    # The saved task text and the injected stdout are UTF-8; the OS-locale default
+    # (cp1252 on Windows Python <=3.14) would crash printing a non-ASCII request
+    # and lose the whole injection (CONF-UTF8).
+    for stream in (sys.stdin, sys.stdout):
+        try:
+            stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
     try:
         data = json.load(sys.stdin)
     except Exception:
@@ -58,7 +66,7 @@ def main():
     session = re.sub(r"[^A-Za-z0-9_-]", "_", str(data.get("session_id", "unknown")))[:80]
     task_file = os.path.join(state_dir(), f"original-task-{session}.txt")
     try:
-        with open(task_file) as f:
+        with open(task_file, encoding="utf-8", errors="replace") as f:
             task = f.read().strip()
     except OSError:
         task = ""

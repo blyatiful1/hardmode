@@ -44,7 +44,7 @@ silently reverting it.
 
 | Knob | Opus 4.8 | Smaller tiers (Sonnet / Haiku driver) |
 |---|---|---|
-| `effortLevel` | `xhigh` — THE lever | Opus-family knob; harmless if unsupported, but don't expect it to compensate. Structure has to. |
+| `effortLevel` | `xhigh` — THE lever | Adaptive-thinking models honor it (Sonnet 5 included — see RESEARCH.md §3); keep `xhigh`, but don't expect effort alone to compensate on a small driver. Structure has to. |
 | `FABLE_LOOP_THRESHOLD` | 3 (default) | **2** — grind starts earlier, trip earlier (shipped in `settings-snippet-small.json` via `--tier small`) |
 | Verification agents (`verifier`, `oracle`, `plan-critic`) | inherit session model | **Pin to the strongest tier your plan offers** — `./install.sh --strong-model opus` injects `model: opus` into their frontmatter |
 | Fable-skill step size (Stage 3) | "smallest coherent steps" | Halve it: verify after every step, commit after every green. Small models drift furthest between checkpoints — `/big-task <task>` encodes exactly this loop deterministically. |

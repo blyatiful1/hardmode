@@ -1,5 +1,5 @@
 {
-  "//": "Small-driver variant (Sonnet/Haiku daily driver) — merge into ~/.claude/settings.json. Identical to settings-snippet.json except FABLE_LOOP_THRESHOLD=2: on a small model the second identical failure is already the signal (docs/SUCCESSION.md). effortLevel stays — it is an Opus-family knob, harmless when unsupported.",
+  "//": "Small-driver variant (Sonnet/Haiku daily driver) — merge into ~/.claude/settings.json. Identical to settings-snippet.json except FABLE_LOOP_THRESHOLD=2: on a small model the second identical failure is already the signal (docs/SUCCESSION.md). effortLevel stays — adaptive-thinking models (Sonnet 5 included) honor it; just don't expect effort alone to compensate on a small driver (docs/SUCCESSION.md).",
   "effortLevel": "xhigh",
   "env": {
     "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",

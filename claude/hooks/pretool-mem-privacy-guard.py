@@ -153,6 +153,15 @@ def block(target, pattern):
 
 
 def main():
+    # Pending content (stdin) and the block reason (stderr) are UTF-8 regardless of OS
+    # locale. On Windows Python <=3.14 the cp1252 default would UnicodeError on a
+    # multi-byte marker/content and fail this guard OPEN — silently ALLOWING the very
+    # leak it exists to block. Reconfigure before any read/write.
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     data = json.load(sys.stdin)
     if not isinstance(data, dict):
         return 0

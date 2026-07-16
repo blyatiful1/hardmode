@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
 fable-protocol installer for Windows — copies the framework into ~\.claude with backups.
 

@@ -45,7 +45,9 @@ def entry_text(entry):
 
 
 def first_user_message(transcript_path):
-    with open(transcript_path) as f:
+    # Transcripts are UTF-8; the OS-locale default (cp1252 on Windows Python <=3.14)
+    # would crash on multi-byte content and lose the save entirely (CONF-UTF8).
+    with open(transcript_path, encoding="utf-8", errors="replace") as f:
         for line in f:
             try:
                 entry = json.loads(line)
@@ -60,6 +62,10 @@ def first_user_message(transcript_path):
 
 
 def main():
+    try:
+        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     data = json.load(sys.stdin)
     text = first_user_message(data["transcript_path"])
     if not text:
@@ -69,7 +75,9 @@ def main():
     session = re.sub(r"[^A-Za-z0-9_-]", "_", str(data.get("session_id", "unknown")))[:80]
     path = os.path.join(state_dir(), f"original-task-{session}.txt")
     tmp = path + ".tmp"
-    with open(tmp, "w") as f:
+    # utf-8 explicitly: the user's request may contain characters the OS-locale
+    # default (cp1252) cannot encode — a crash here silently loses the save.
+    with open(tmp, "w", encoding="utf-8") as f:
         f.write(text)
     os.replace(tmp, path)
     return 0

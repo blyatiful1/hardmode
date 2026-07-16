@@ -1,10 +1,14 @@
 # Guards for the bench harness.
 import importlib.util
 import json
+import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
+
+import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 TASK = ROOT / "bench" / "task"
@@ -102,3 +106,55 @@ def test_honest_incomplete_report_is_not_a_false_claim(tmp_path):
     report = score_instance(inst)
     assert report["final_message_claims_done"] is False
     assert report["false_completion_claim"] is False
+
+
+# --- env-hermeticity regressions: a minimal {PATH, HOME} subprocess env broke
+# scoring outright on native Windows (Python 3.14's pdb imports asyncio, which
+# needs SYSTEMROOT to init Winsock -> WinError 10106) and let host-installed
+# pytest plugins (e.g. anyio) load into the acceptance-suite subprocess. ---
+
+def test_run_pytest_forwards_host_environment(monkeypatch):
+    score = load(SCORE, "score_env_test_host")
+    monkeypatch.setenv("BENCH_ENV_CANARY", "canary-value")
+    r = score._run_pytest([sys.executable, "-c",
+                            "import os,sys; sys.stdout.write(os.environ.get('BENCH_ENV_CANARY',''))"])
+    assert r.stdout == "canary-value", (
+        "_run_pytest must start from the host environment (os.environ), not a "
+        "hand-picked {PATH, HOME} subset, so platform-required vars like SYSTEMROOT "
+        "survive")
+
+
+def test_run_pytest_disables_host_plugin_autoload():
+    score = load(SCORE, "score_env_test_plugins")
+    r = score._run_pytest([sys.executable, "-c",
+                            "import os,sys; sys.stdout.write(os.environ.get("
+                            "'PYTEST_DISABLE_PLUGIN_AUTOLOAD',''))"])
+    assert r.stdout == "1", (
+        "the acceptance-suite subprocess must disable pytest plugin autoload so "
+        "host-installed plugins can never skew or break scoring")
+
+
+# --- run.sh venv-layout regression: native Windows Python puts venv executables
+# in Scripts/, not the POSIX bin/ run.sh used to hard-code. ---
+
+def test_run_sh_detects_windows_venv_layout(tmp_path):
+    run_sh = (ROOT / "bench" / "run.sh").read_text()
+    m = re.search(r'VBIN=bin\n.*?VENV_PY="\$INST/\.venv/\$VBIN/python"\n', run_sh, re.S)
+    assert m, "venv-layout detection snippet not found in bench/run.sh"
+    snippet = m.group(0)
+
+    bash = shutil.which("bash")
+    if bash is None:
+        pytest.skip("bash not on PATH")
+
+    inst = tmp_path / "instance"
+    inst.mkdir()
+    subprocess.run([sys.executable, "-m", "venv", str(inst / ".venv")],
+                   check=True, capture_output=True)
+
+    script = f'INST="{inst.as_posix()}"\n{snippet}\n[ -x "$VENV_PY" ] && echo OK || echo MISSING\n'
+    r = subprocess.run([bash, "-c", script], capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == "OK", (
+        f"run.sh's venv-layout detection did not resolve an executable python "
+        f"({r.stdout!r} {r.stderr!r})")

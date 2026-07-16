@@ -3,6 +3,7 @@
 # never imported — so every path/BASE resolution is proven the way the installed
 # binary runs it. Each test gets its own tmp_path => its own CLAUDE_DIR, so runs
 # never collide and the index/db always lands under the scratch dir, never $HOME.
+import importlib.util
 import json
 import os
 import subprocess
@@ -10,7 +11,19 @@ import sys
 from datetime import date, timedelta
 from pathlib import Path
 
+import pytest
+
 MEM = Path(__file__).resolve().parents[1] / "claude" / "cli" / "mem.py"
+
+
+def load_mem():
+    """Import mem.py as a module for the few tests that must drive upsert() in-process
+    (the concurrent-writer race can only be reproduced deterministically by controlling
+    the statement interleaving). Every other test runs the CLI as a real subprocess."""
+    spec = importlib.util.spec_from_file_location("fable_mem_under_test", str(MEM))
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
 
 
 def run(claude_dir, *args, env_extra=None):
@@ -77,7 +90,12 @@ def test_index_is_resilient_to_a_bad_file_in_the_batch(tmp_path):
     gdir = global_dir(tmp_path)
     write_memory(gdir, "good1.md", "Good one", "ok")
     write_memory(gdir, "good2.md", "Good two", "ok")
-    os.symlink(str(gdir / "does-not-exist.md"), str(gdir / "broken.md"))
+    try:
+        os.symlink(str(gdir / "does-not-exist.md"), str(gdir / "broken.md"))
+    except OSError:
+        # Creating a symlink needs SeCreateSymbolicLinkPrivilege on Windows (WinError
+        # 1314 for an unelevated user); skip where symlinks are unavailable.
+        pytest.skip("symlinks unavailable (needs privilege on Windows)")
 
     r = run(tmp_path, "index")
     assert r.returncode == 0, r.stderr
@@ -430,3 +448,89 @@ def test_base_honors_claude_dir(tmp_path):
     stats = run(tmp_path, "stats")
     assert str(db) in stats.stdout  # reports the scratch-dir db...
     assert os.path.expanduser("~/.claude") not in stats.stdout  # ...never ~/.claude
+
+
+# ---------------------------------------------------------------------------
+# concurrent writers — atomic UPSERT must not crash the loser on a UNIQUE race
+# ---------------------------------------------------------------------------
+def _rec(path):
+    return {"path": str(path), "scope": "global", "project": "", "name": "Race",
+            "description": "d", "type": "", "created": "", "verified": "",
+            "visibility": "", "mtime": 1.0, "body": "b"}
+
+
+def test_upsert_survives_a_concurrent_writer_racing_the_same_path(tmp_path):
+    # Two writers both observe a path absent, then both INSERT it. The old check-then-act
+    # upsert crashed the loser with `UNIQUE constraint failed: memories.path`. Reproduced
+    # deterministically: a proxy connection lets a second writer INSERT+commit the SAME
+    # path in the instant writer A is about to INSERT — the exact two-process window.
+    mem = load_mem()
+    base = str(tmp_path)
+    conn, mode = mem.open_db(base=base)
+    racer, _ = mem.open_db(base=base)
+    rec = _rec(tmp_path / "memory" / "race.md")
+    state = {"raced": False}
+
+    class RacingConn:
+        def __init__(self, real):
+            self._real = real
+
+        def execute(self, sql, *a, **k):
+            if not state["raced"] and sql.startswith("INSERT INTO memories(path"):
+                state["raced"] = True
+                mem.upsert(racer, mode, rec)   # the concurrent winner commits first
+                racer.commit()
+            return self._real.execute(sql, *a, **k)
+
+        def commit(self):
+            return self._real.commit()
+
+    # Must NOT raise: ON CONFLICT folds the collision into an UPDATE.
+    mem.upsert(RacingConn(conn), mode, rec)
+    conn.commit()
+    assert state["raced"], "the race window was never exercised"
+    n = conn.execute("SELECT COUNT(*) FROM memories WHERE path=?",
+                     (rec["path"],)).fetchone()[0]
+    assert n == 1  # both writers converge on a single row, no duplicate/crash
+    conn.close()
+    racer.close()
+
+
+# ---------------------------------------------------------------------------
+# degraded search — whole-token matching, not substring containment
+# ---------------------------------------------------------------------------
+def test_degraded_search_matches_whole_tokens_not_substrings(tmp_path):
+    # "test" must not match because it is a substring of "latest"; the degraded LIKE
+    # path used to count substring containment, inflating relevance with coincidences.
+    env = {"FABLE_MEM_FORCE_DEGRADED": "1"}
+    write_memory(global_dir(tmp_path), "runbook.md", "Latest runbook",
+                 "runbook procedures for latest tools")
+    run(tmp_path, "index", env_extra=env)
+    hits = json.loads(run(tmp_path, "search", "test", "--json", env_extra=env).stdout)
+    assert hits == [], hits  # only a substring of 'latest' — not a genuine token hit
+    # a genuine token still matches
+    real = json.loads(run(tmp_path, "search", "runbook", "--json", env_extra=env).stdout)
+    assert any(h["slug"] == "runbook" for h in real)
+
+
+# ---------------------------------------------------------------------------
+# FABLE_MEM_MIN_SCORE / FABLE_MEM_MIN_OVERLAP are separate, non-crossing knobs
+# ---------------------------------------------------------------------------
+def test_min_score_env_filters_cli_search(tmp_path):
+    write_memory(global_dir(tmp_path), "a.md", "Alpha decision", "retry backoff")
+    run(tmp_path, "index")
+    base = json.loads(run(tmp_path, "search", "alpha", "--json").stdout)
+    assert base  # normally a hit
+    filtered = json.loads(run(tmp_path, "search", "alpha", "--json",
+                              env_extra={"FABLE_MEM_MIN_SCORE": "1000000000"}).stdout)
+    assert filtered == []  # bm25-scale threshold drops everything
+
+
+def test_min_overlap_env_does_not_affect_cli_search(tmp_path):
+    # FABLE_MEM_MIN_OVERLAP is the recall hook's keyword-count knob; mem.py search must
+    # ignore it (it filters on FABLE_MEM_MIN_SCORE only). Proves the two are decoupled.
+    write_memory(global_dir(tmp_path), "a.md", "Alpha decision", "retry backoff")
+    run(tmp_path, "index")
+    hits = json.loads(run(tmp_path, "search", "alpha", "--json",
+                          env_extra={"FABLE_MEM_MIN_OVERLAP": "1000000000"}).stdout)
+    assert hits  # CLI search unaffected by the recall knob
