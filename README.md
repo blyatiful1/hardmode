@@ -41,7 +41,7 @@ SCENARIO 2  reflexive destructive commands on a dirty tree
   kit:    BLOCKED (destructive guard) -> "... recursive rm aimed at /, ~, $HOME ..."
   bash:   rm -rf build/             (scoped and recoverable)
   kit:    ALLOWED (exit 0) -- scoped deletes pass untouched
-  bash:   FABLE_DESTRUCTIVE_OK=1 git reset --hard   (user-approved escape hatch)
+  bash:   HARDMODE_DESTRUCTIVE_OK=1 git reset --hard   (user-approved escape hatch)
   kit:    ALLOWED (exit 0) -- override honored for this one command only
   [ok]
 
@@ -195,7 +195,7 @@ claude/
     sessionstart-compact-recovery.py  post-compaction: recovery protocol + saved request +
                                the ACTUAL git state
     userpromptsubmit-mem-recall.py  cross-project recall: ≤3 memory pointers per prompt,
-                               token-overlap-gated (FABLE_MEM_MIN_OVERLAP), fail-open
+                               token-overlap-gated (HARDMODE_MEM_MIN_OVERLAP), fail-open
     sessionend-mem-journal.py  one NDJSON breadcrumb per session + incremental reindex
     pretool-mem-privacy-guard.py  blocks a Write/Edit into the global corpus whose content
                                hits a privacy.toml work-marker — the promotion gate
@@ -205,7 +205,7 @@ claude/
   memory/privacy.toml          work-marker patterns; seeded only if absent, never overwritten
   settings/
     settings-snippet.json            effortLevel xhigh + all nine hooks wired
-    settings-snippet-small.json      same, plus FABLE_LOOP_THRESHOLD=2 for small drivers
+    settings-snippet-small.json      same, plus HARDMODE_LOOP_THRESHOLD=2 for small drivers
     settings-snippet-windows.json    Windows twin (python, not python3; Bash|PowerShell
     settings-snippet-windows-small.json  matchers) — kept in lockstep by tests
 install.sh / install.ps1       POSIX + Windows installers (full parity; --tier small,
@@ -243,7 +243,7 @@ No spin: on this task and this model, the kit does not raise the score. It is in
 
 Claude Code's native auto-memory is per-git-repo: a decision banked in repo A is invisible while you work in repo B, so the same wheel gets reinvented across projects. fable-mem layers a machine-wide memory corpus **on top of** the native one — never wrapping it, only adding a shared, searchable cross-project surface at `~/.claude/memory/` (unclaimed by any native feature). It carries the same discipline as the rest of the kit: deterministic where it must hold, quiet where it would annoy, fail-open everywhere.
 
-- **Recall without asking.** A UserPromptSubmit hook runs one read-only FTS5 query against a local sqlite index and injects at most three memory pointers (title + one-line description + path — never bodies) as inert, labelled reference data. Token-overlap-gated (`FABLE_MEM_MIN_OVERLAP`, whole-token matching so `run` doesn't match `runbook`), ~600-token budget, per-session dedupe: silence over noise. Cross-repo, so a lesson from project A surfaces while you work in project B.
+- **Recall without asking.** A UserPromptSubmit hook runs one read-only FTS5 query against a local sqlite index and injects at most three memory pointers (title + one-line description + path — never bodies) as inert, labelled reference data. Token-overlap-gated (`HARDMODE_MEM_MIN_OVERLAP`, whole-token matching so `run` doesn't match `runbook`), ~600-token budget, per-session dedupe: silence over noise. Cross-repo, so a lesson from project A surfaces while you work in project B.
 - **A breadcrumb every session.** A SessionEnd hook appends one NDJSON line (timestamp, cwd, git root + branch + dirty-file count, end reason) to `~/.claude/memory/journal.ndjson` — a deterministic trace even when the session banked nothing — then runs an incremental reindex so this session's memory is searchable in the next. `/memory-review` mines that journal for high-activity sessions that banked nothing and proposes what was worth keeping.
 - **The promotion boundary is a hook, not a rule.** The one line that must hold is project → global: a work marker (internal ticket id, private hostname, client codename) must never cross into the shared corpus. A PreToolUse guard scans the pending content of any **Write/Edit** into `~/.claude/memory/` against your `privacy.toml` and blocks it (exit 2) before the marker lands; it matches those tools, not Bash/interpreter writes (`cp`/`cat >>`/`python3 -c`), so `mem doctor --privacy` is the detective backstop that sweeps the whole corpus dir — including the `.ndjson` journal — for anything the write-time gate didn't see.
 - **Hygiene that proposes, never deletes.** `mem gc-scan` mechanically flags near-duplicates, stale entries, relative-date offenders, and same-topic pairs; `/memory-gc` adds three-way contradiction judges and rebuilds the index. Every removal comes back as a proposal — the corpus is never mutated out from under you.
@@ -313,7 +313,7 @@ The kit targets **failure modes, not model IDs** — nothing in it hardcodes `cl
 
 The bench harness is the kit's own succession plan: measure the new model stock vs kitted, keep what still earns its cost, drop what doesn't.
 
-Going the other direction — running the kit on a **smaller** driver model (a Sonnet or Haiku daily driver) — is covered by [docs/SUCCESSION.md](docs/SUCCESSION.md): what breaks first as the model shrinks, the config deltas (`FABLE_LOOP_THRESHOLD=2`, pinning the verification agents to the strongest tier your plan offers), and the asymmetric-verification principle (draft cheap, verify strong; when all tiers are small, buy rigor with votes instead of weights).
+Going the other direction — running the kit on a **smaller** driver model (a Sonnet or Haiku daily driver) — is covered by [docs/SUCCESSION.md](docs/SUCCESSION.md): what breaks first as the model shrinks, the config deltas (`HARDMODE_LOOP_THRESHOLD=2`, pinning the verification agents to the strongest tier your plan offers), and the asymmetric-verification principle (draft cheap, verify strong; when all tiers are small, buy rigor with votes instead of weights).
 
 ## Known limits
 

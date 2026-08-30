@@ -140,9 +140,9 @@ def test_quoted_rm_target_still_blocked():
 
 def test_override_token_allows(tmp_path):
     repo = make_repo(tmp_path, dirty=True)
-    assert run_hook("FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+    assert run_hook("HARDMODE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
     # Also valid as a segment-leading assignment after a separator.
-    assert run_hook("cd repo; FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+    assert run_hook("cd repo; HARDMODE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
 
 
 def test_override_only_as_assignment_not_mere_mention(tmp_path):
@@ -150,7 +150,7 @@ def test_override_only_as_assignment_not_mere_mention(tmp_path):
     # position) must NOT disable the guard for the rest of the command.
     repo = make_repo(tmp_path, dirty=True)
     assert run_hook(
-        'git commit -m "set FABLE_DESTRUCTIVE_OK=1 to bypass" && git reset --hard',
+        'git commit -m "set HARDMODE_DESTRUCTIVE_OK=1 to bypass" && git reset --hard',
         cwd=repo).returncode == 2
 
 
@@ -159,14 +159,14 @@ def test_override_is_scoped_to_its_own_segment(tmp_path):
     # prefixes. A later, UNAPPROVED destructive segment must still be blocked.
     repo = make_repo(tmp_path, dirty=True)
     assert run_hook(
-        "FABLE_DESTRUCTIVE_OK=1 git reset --hard; rm -rf /", cwd=repo).returncode == 2
+        "HARDMODE_DESTRUCTIVE_OK=1 git reset --hard; rm -rf /", cwd=repo).returncode == 2
     assert run_hook(
-        "FABLE_DESTRUCTIVE_OK=1 git reset --hard && git clean -fd", cwd=repo).returncode == 2
+        "HARDMODE_DESTRUCTIVE_OK=1 git reset --hard && git clean -fd", cwd=repo).returncode == 2
     # A bare NEWLINE is a command separator too — the override must not leak across it.
     assert run_hook(
-        "FABLE_DESTRUCTIVE_OK=1 git reset --hard\nrm -rf /", cwd=repo).returncode == 2
+        "HARDMODE_DESTRUCTIVE_OK=1 git reset --hard\nrm -rf /", cwd=repo).returncode == 2
     # ...but the approved segment alone still passes.
-    assert run_hook("FABLE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
+    assert run_hook("HARDMODE_DESTRUCTIVE_OK=1 git reset --hard", cwd=repo).returncode == 0
 
 
 def test_command_substitution_in_double_quotes_is_inspected(tmp_path):

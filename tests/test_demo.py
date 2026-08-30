@@ -32,12 +32,12 @@ def test_list_prints_names_without_running_scenarios():
 
 
 def test_demo_writes_no_state_to_the_users_real_dir(tmp_path):
-    # The demo pins every hook's FABLE_STATE_DIR to its own throwaway sandbox, so a
-    # run must add nothing to the user's real fable-protocol state dir (the fallback
-    # location ~/.claude/tmp/fable-protocol). Point all temp roots at an isolated box
+    # The demo pins every hook's HARDMODE_STATE_DIR to its own throwaway sandbox, so a
+    # run must add nothing to the user's real hardmode state dir (the fallback
+    # location ~/.claude/tmp/hardmode). Point all temp roots at an isolated box
     # (so the sandbox itself lands under tmp_path) and confirm the real dir is
     # untouched -- a direct check of the "never touches real state" promise.
-    real_state = Path.home() / ".claude" / "tmp" / "fable-protocol"
+    real_state = Path.home() / ".claude" / "tmp" / "hardmode"
 
     def snapshot():
         return {p.name for p in real_state.iterdir()} if real_state.exists() else None
@@ -46,7 +46,7 @@ def test_demo_writes_no_state_to_the_users_real_dir(tmp_path):
     box = tmp_path / "box"
     box.mkdir()
     env = dict(os.environ, TMPDIR=str(box), TEMP=str(box), TMP=str(box))
-    env.pop("FABLE_STATE_DIR", None)  # leave the fallback path as the only thing that could leak
+    env.pop("HARDMODE_STATE_DIR", None)  # leave the fallback path as the only thing that could leak
     r = run_demo(env=env)
     assert r.returncode == 0, r.stdout + r.stderr
     assert snapshot() == before  # nothing added to (or removed from) the real state dir

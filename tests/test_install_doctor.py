@@ -20,7 +20,7 @@ DOCTOR = ROOT / "tools" / "doctor.sh"
 def run(script, claude_dir, state_dir=None):
     env = dict(os.environ, CLAUDE_DIR=str(claude_dir))
     if state_dir:
-        env["FABLE_STATE_DIR"] = str(state_dir)
+        env["HARDMODE_STATE_DIR"] = str(state_dir)
     return subprocess.run(["bash", str(script)], capture_output=True, text=True,
                           timeout=60, env=env)
 
@@ -88,7 +88,7 @@ def test_doctor_flags_unmerged_doctrine(tmp_path):
     install_and_merge_settings(claude)
     r = run(DOCTOR, claude, state_dir=tmp_path / "state")
     assert r.returncode == 1
-    assert "CLAUDE.fable-protocol.md" in r.stdout
+    assert "CLAUDE.hardmode.md" in r.stdout
 
 
 def test_doctor_fails_on_partial_multi_event_merge(tmp_path):

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse destructive-command guard (fable-protocol).
+"""PreToolUse destructive-command guard (hardmode).
 
 Long-horizon autonomous sessions are exactly where a reflexive `git reset --hard`
 or `git checkout -- .` destroys hours of uncommitted work. This hook blocks
@@ -22,7 +22,7 @@ snippets match `Bash|PowerShell`): git commands are shell-identical, and the
 rm check recognizes the PowerShell deletion spellings above.
 
 Escape hatch: after the USER explicitly approves the loss, re-run the command
-prefixed with FABLE_DESTRUCTIVE_OK=1. The model must never self-approve.
+prefixed with HARDMODE_DESTRUCTIVE_OK=1. The model must never self-approve.
 
 Fails open on any error (not a git repo, git missing, malformed payload):
 a guard that can break sessions would cost more than it saves.
@@ -32,13 +32,13 @@ import re
 import subprocess
 import sys
 
-OVERRIDE = "FABLE_DESTRUCTIVE_OK=1"
+OVERRIDE = "HARDMODE_DESTRUCTIVE_OK=1"
 # The override only counts as an actual env-assignment prefix at the START of a shell
 # segment (after any other leading VAR=val assignments) — NOT merely mentioned anywhere
 # (a commit message or echo that contains the string must not disable the guard). It is
 # matched per segment against the quote-stripped view, so it exempts only the command it
 # prefixes, never later segments after a ; | && separator.
-OVERRIDE_SEGMENT = re.compile(r"^\s*(?:[A-Za-z_]\w*=\S*\s+)*FABLE_DESTRUCTIVE_OK=1(?:\s|$)")
+OVERRIDE_SEGMENT = re.compile(r"^\s*(?:[A-Za-z_]\w*=\S*\s+)*HARDMODE_DESTRUCTIVE_OK=1(?:\s|$)")
 
 
 _QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")

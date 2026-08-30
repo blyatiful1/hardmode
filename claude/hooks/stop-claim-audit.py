@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Stop-hook claim-audit gate (fable-protocol).
+"""Stop-hook claim-audit gate (hardmode).
 
 Blocks the FIRST stop of a session iff (a) the final assistant message makes a
 completion claim and (b) the session modified files — then forces one audit pass.

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""SessionStart(compact) recovery hook (fable-protocol).
+"""SessionStart(compact) recovery hook (hardmode).
 
 Runs immediately after a compaction and injects (stdout -> context), in order:
   1. the recovery protocol (what to re-read before acting),
@@ -28,9 +28,9 @@ PROTOCOL = (
 
 
 def state_dir():
-    return os.environ.get("FABLE_STATE_DIR") or os.path.join(
+    return os.environ.get("HARDMODE_STATE_DIR") or os.path.join(
         os.environ.get("CLAUDE_DIR") or os.path.expanduser("~/.claude"),
-        "tmp", "fable-protocol")
+        "tmp", "hardmode")
 
 
 # Total git budget must fit inside the hook's 10s timeout with headroom: two calls

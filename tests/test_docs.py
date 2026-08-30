@@ -30,8 +30,8 @@ def test_succession_knobs_are_real():
     # it claims to configure.
     succession = (ROOT / "docs" / "SUCCESSION.md").read_text(encoding="utf-8")
     loop_alarm = (ROOT / "claude" / "hooks" / "posttool-loop-alarm.py").read_text(encoding="utf-8")
-    assert "FABLE_LOOP_THRESHOLD" in succession
-    assert "FABLE_LOOP_THRESHOLD" in loop_alarm
+    assert "HARDMODE_LOOP_THRESHOLD" in succession
+    assert "HARDMODE_LOOP_THRESHOLD" in loop_alarm
     # ...and the workflows it routes small models to are the ones that ship.
     for wf in ("paranoid-review", "verify-claim", "deep-plan", "bug-hunt"):
         assert wf in succession
@@ -52,4 +52,4 @@ def test_state_env_var_consistent_across_stateful_hooks():
     hooks = ROOT / "claude" / "hooks"
     for name in ("posttool-loop-alarm.py",
                  "precompact-save-task.py", "sessionstart-compact-recovery.py"):
-        assert "FABLE_STATE_DIR" in (hooks / name).read_text(encoding="utf-8"), name
+        assert "HARDMODE_STATE_DIR" in (hooks / name).read_text(encoding="utf-8"), name

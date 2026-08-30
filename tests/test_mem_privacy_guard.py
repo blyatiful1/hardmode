@@ -96,7 +96,7 @@ def test_case_insensitive_fs_variant_path_is_blocked(tmp_path):
     # since the CI fs is case-sensitive.
     write_privacy(tmp_path, ["ACME-*"])
     variant = Path(tmp_path) / "Memory" / "leak.md"     # capital M
-    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), FABLE_MEM_FS_CASE_INSENSITIVE="1")
+    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), HARDMODE_MEM_FS_CASE_INSENSITIVE="1")
     payload = {"tool_name": "Write",
                "tool_input": {"file_path": str(variant), "content": "secret ACME-1234"}}
     r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
@@ -114,7 +114,7 @@ def test_case_sensitive_fs_variant_path_is_allowed(tmp_path):
     # must NOT be blocked (no false-block of a real sibling on Linux).
     write_privacy(tmp_path, ["ACME-*"])
     variant = Path(tmp_path) / "Memory" / "leak.md"
-    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), FABLE_MEM_FS_CASE_INSENSITIVE="0")
+    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), HARDMODE_MEM_FS_CASE_INSENSITIVE="0")
     payload = {"tool_name": "Write",
                "tool_input": {"file_path": str(variant), "content": "secret ACME-1234"}}
     r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),

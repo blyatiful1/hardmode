@@ -23,7 +23,7 @@ In order, and what compensates:
    the PreCompact/SessionStart pair. On smaller models also shrink the task: prefer
    several sessions with committed checkpoints over one marathon session.
 3. **Grind discipline** (fix-loops start earlier and run longer) — set
-   `FABLE_LOOP_THRESHOLD=2` in the hook's environment. On a small model the second
+   `HARDMODE_LOOP_THRESHOLD=2` in the hook's environment. On a small model the second
    identical failure is already the signal; don't wait for the third.
 4. **Orchestration quality** (a small model is a worse *conductor*, not just a worse
    soloist) — prefer the scripted workflows (`/paranoid-review`, `/verify-claim`,
@@ -45,7 +45,7 @@ silently reverting it.
 | Knob | Opus 4.8 | Smaller tiers (Sonnet / Haiku driver) |
 |---|---|---|
 | `effortLevel` | `xhigh` — THE lever | Adaptive-thinking models honor it (Sonnet 5 included — see RESEARCH.md §3); keep `xhigh`, but don't expect effort alone to compensate on a small driver. Structure has to. |
-| `FABLE_LOOP_THRESHOLD` | 3 (default) | **2** — grind starts earlier, trip earlier (shipped in `settings-snippet-small.json` via `--tier small`) |
+| `HARDMODE_LOOP_THRESHOLD` | 3 (default) | **2** — grind starts earlier, trip earlier (shipped in `settings-snippet-small.json` via `--tier small`) |
 | Verification agents (`verifier`, `oracle`, `plan-critic`) | inherit session model | **Pin to the strongest tier your plan offers** — `./install.sh --strong-model opus` injects `model: opus` into their frontmatter |
 | Fable-skill step size (Stage 3) | "smallest coherent steps" | Halve it: verify after every step, commit after every green. Small models drift furthest between checkpoints — `/big-task <task>` encodes exactly this loop deterministically. |
 | Workflows vs free-form delegation | either | scripted workflows first — and the workflows now pin their verifiers/judges to `effort: xhigh` themselves, so verification stays strong even when the session runs lower |

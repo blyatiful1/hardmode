@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
-"""Live demo of the fable-protocol deterministic hooks (stdlib-only, cross-platform).
+"""Live demo of the hardmode deterministic hooks (stdlib-only, cross-platform).
 
 Runs the ACTUAL shipped hooks (../claude/hooks/*.py, resolved relative to this
 script) as subprocesses against synthetic payloads, in a throwaway sandbox
-(tempfile FABLE_STATE_DIR + a scratch `git init` repo for the guard's dirty-tree
+(tempfile HARDMODE_STATE_DIR + a scratch `git init` repo for the guard's dirty-tree
 checks). Never touches ~/.claude or any real state: every hook run has its
-FABLE_STATE_DIR pinned to the sandbox.
+HARDMODE_STATE_DIR pinned to the sandbox.
 
 Each scenario asserts the hook's exit code internally, so the demo is itself a
 test. It prints `demo: N/N scenarios behaved as expected` and exits 0, or reports
@@ -40,12 +40,12 @@ class Deviation(Exception):
 
 def run_hook(hook, payload):
     """Run a shipped hook as a subprocess: payload -> utf-8 JSON on stdin. Returns
-    (exit_code, stdout, stderr) as text. FABLE_STATE_DIR is pinned to the sandbox
-    and FABLE_LOOP_THRESHOLD is cleared so the run is deterministic regardless of
+    (exit_code, stdout, stderr) as text. HARDMODE_STATE_DIR is pinned to the sandbox
+    and HARDMODE_LOOP_THRESHOLD is cleared so the run is deterministic regardless of
     the caller's environment."""
     env = dict(os.environ)
-    env.pop("FABLE_LOOP_THRESHOLD", None)
-    env["FABLE_STATE_DIR"] = STATE_DIR
+    env.pop("HARDMODE_LOOP_THRESHOLD", None)
+    env["HARDMODE_STATE_DIR"] = STATE_DIR
     p = subprocess.run(
         [sys.executable, str(HOOKS / hook)],
         input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -130,8 +130,8 @@ def sc_destructive(n):
     print("  kit:    ALLOWED (exit 0) -- scoped deletes pass untouched")
     expect(code, 0, "guard scoped rm")
 
-    code, _, _ = guard("FABLE_DESTRUCTIVE_OK=1 git reset --hard")
-    print("  bash:   FABLE_DESTRUCTIVE_OK=1 git reset --hard   (user-approved escape hatch)")
+    code, _, _ = guard("HARDMODE_DESTRUCTIVE_OK=1 git reset --hard")
+    print("  bash:   HARDMODE_DESTRUCTIVE_OK=1 git reset --hard   (user-approved escape hatch)")
     print("  kit:    ALLOWED (exit 0) -- override honored for this one command only")
     expect(code, 0, "guard override")
     print("  [ok]")
@@ -186,8 +186,8 @@ def main(argv):
             print(f"{i}  {name}")
         return 0
     global STATE_DIR
-    STATE_DIR = tempfile.mkdtemp(prefix="fable-demo-")
-    print("fable-protocol hooks -- live demo (the real shipped hooks catch these failure modes)")
+    STATE_DIR = tempfile.mkdtemp(prefix="hardmode-demo-")
+    print("hardmode hooks -- live demo (the real shipped hooks catch these failure modes)")
     passed = 0
     try:
         for i, (_, fn) in enumerate(SCENARIOS, 1):

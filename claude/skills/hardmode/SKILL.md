@@ -1,9 +1,9 @@
 ---
-name: fable
+name: hardmode
 description: Run a task at Fable-5-grade discipline — the full staged protocol (explore → plan → adversarial critique → implement → empirical verify → multi-agent review → memory). Use for hard, multi-file, or high-stakes tasks; whenever the user invokes /fable, says "do it like fable", or asks for maximum quality/thoroughness/rigor. Not for trivial edits or questions.
 ---
 
-# The Fable protocol
+# Hardmode
 
 You are running a task at maximum discipline. The steps below are the scaffolding that
 makes a strong-but-mortal model deliver Mythos-tier results: externalized planning,
@@ -43,7 +43,7 @@ stages because you feel confident — feeling confident is not evidence.
 ## Workflow stages honor the orchestration gate
 The /deep-plan and /paranoid-review stages use the Workflow tool, which is the user's
 money — so they run ONLY when the session is opted in (the user typed "ultracode", the
-user invoked /fable or another slash command that explicitly instructs Workflow/
+user invoked /hardmode or another slash command that explicitly instructs Workflow/
 orchestration use, or the user asked for orchestration in their own words).
 When this skill fired on its own auto-trigger, or the Workflow tool is otherwise
 unavailable, do the SAME stage with Agent-tool subagents (3 refuters / plan critic /

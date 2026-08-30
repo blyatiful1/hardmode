@@ -11,7 +11,7 @@ RECOVER = HOOKS / "sessionstart-compact-recovery.py"
 
 
 def run(hook, payload, state_dir, raw_stdin=None):
-    env = dict(os.environ, FABLE_STATE_DIR=str(state_dir))
+    env = dict(os.environ, HARDMODE_STATE_DIR=str(state_dir))
     return subprocess.run(
         [sys.executable, str(hook)],
         input=raw_stdin if raw_stdin is not None else json.dumps(payload),
@@ -128,7 +128,7 @@ def test_non_ascii_request_survives_the_save_recover_round_trip(tmp_path):
     t = tmp_path / "transcript.jsonl"
     t.write_text(json.dumps({"type": "user", "message": {"content": msg}},
                             ensure_ascii=False), encoding="utf-8")
-    env_io = dict(os.environ, FABLE_STATE_DIR=str(tmp_path), PYTHONIOENCODING="cp1252")
+    env_io = dict(os.environ, HARDMODE_STATE_DIR=str(tmp_path), PYTHONIOENCODING="cp1252")
     r = subprocess.run([sys.executable, str(SAVE)],
                        input=json.dumps({"session_id": "s1", "transcript_path": str(t)},
                                         ensure_ascii=False).encode("utf-8"),

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fable-protocol doctor — verifies an installation is actually live, not silently inert.
+# hardmode doctor — verifies an installation is actually live, not silently inert.
 #
 # The kit's weakest link is the one manual step: merging the settings snippet.
 # A botched merge leaves every hook unwired and the whole kit inert with zero
@@ -24,7 +24,7 @@ crlf_same() { [ -f "$2" ] && cmp -s <(tr -d '\r' <"$1") <(tr -d '\r' <"$2"); }
 # frontmatter pin (--strong-model), so a pinned install is not misreported as drift.
 agent_same() { [ -f "$2" ] && cmp -s <(sed '/^model: /d' "$1" | tr -d '\r') <(sed '/^model: /d' "$2" | tr -d '\r'); }
 
-echo "fable-protocol doctor — checking $DST"
+echo "hardmode doctor — checking $DST"
 
 # 0. Claude Code version — saved workflows (/paranoid-review etc.) need >= 2.1.154.
 if command -v claude >/dev/null 2>&1; then
@@ -111,8 +111,8 @@ if grep -q "Evidence before claims" "$DST/CLAUDE.md" 2>/dev/null; then
   if grep -q "Replace with 3-6 lines" "$DST/CLAUDE.md" 2>/dev/null; then
     warn "the '## This machine' section is still the placeholder — fill it in"
   fi
-elif [ -f "$DST/CLAUDE.fable-protocol.md" ]; then
-  bad "doctrine NOT merged: it sits unloaded in CLAUDE.fable-protocol.md next to your CLAUDE.md"
+elif [ -f "$DST/CLAUDE.hardmode.md" ]; then
+  bad "doctrine NOT merged: it sits unloaded in CLAUDE.hardmode.md next to your CLAUDE.md"
 else
   bad "doctrine missing: no Evidence-before-claims section in $DST/CLAUDE.md"
 fi
@@ -187,7 +187,7 @@ sys.exit(0 if s.get('effortLevel') == 'xhigh' else 1)" "$SETTINGS" 2>/dev/null; 
 fi
 
 # 5. Hook state dir is writable (loop alarm, weakening alarm, compaction save).
-STATE="${FABLE_STATE_DIR:-$DST/tmp/fable-protocol}"
+STATE="${HARDMODE_STATE_DIR:-$DST/tmp/hardmode}"
 if mkdir -p "$STATE" 2>/dev/null && touch "$STATE/.doctor-probe" 2>/dev/null; then
   rm -f "$STATE/.doctor-probe"
   ok "state dir writable: $STATE"

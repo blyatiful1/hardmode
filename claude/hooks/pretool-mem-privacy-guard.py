@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreToolUse memory privacy guard (fable-protocol, L3).
+"""PreToolUse memory privacy guard (hardmode, L3).
 
 WHY THIS EXISTS
     The one boundary that must hold in a cross-project memory system is
@@ -61,8 +61,8 @@ def _fs_case_insensitive(path):
     Windows). Probed precisely — a case-variant of an existing path resolving to the
     SAME file — so we case-fold ONLY where the fs actually would, never false-blocking a
     genuinely distinct `Memory/` sibling on a case-sensitive Linux fs. Overridable with
-    FABLE_MEM_FS_CASE_INSENSITIVE=1/0 (test seam + manual escape hatch)."""
-    forced = os.environ.get("FABLE_MEM_FS_CASE_INSENSITIVE")
+    HARDMODE_MEM_FS_CASE_INSENSITIVE=1/0 (test seam + manual escape hatch)."""
+    forced = os.environ.get("HARDMODE_MEM_FS_CASE_INSENSITIVE")
     if forced is not None:
         return forced == "1"
     try:

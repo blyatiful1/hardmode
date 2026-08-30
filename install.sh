@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# fable-protocol installer — copies the framework into ~/.claude with backups.
+# hardmode installer — copies the framework into ~/.claude with backups.
 # Never edits settings.json; prints the snippet to merge instead.
 set -euo pipefail
 
@@ -13,9 +13,9 @@ done
 SRC="$(cd "$(dirname "$0")/claude" && pwd)"
 DST="${CLAUDE_DIR:-$HOME/.claude}"
 STAMP="$(date +%Y%m%d-%H%M%S)"
-# Backups live OUTSIDE the live agents/skills/... trees: a fable.bak-*/ directory
+# Backups live OUTSIDE the live agents/skills/... trees: a hardmode.bak-*/ directory
 # left inside skills/ would itself be loaded by Claude Code as a duplicate skill.
-BAK="$DST/fable-protocol-backups/$STAMP"
+BAK="$DST/hardmode-backups/$STAMP"
 
 # backup <target> <relative-name> — copy the existing target into the backup dir
 # (the original stays in place; the copy is the safety net before it is overwritten).
@@ -30,14 +30,14 @@ backup() {
 identical() { [ -f "$2" ] && cmp -s "$1" "$2"; }
 
 # skill_unchanged <src_dir> <dst_dir> — true if every file the repo ships for this
-# skill already matches the destination AND the recorded ship-list (.fable-manifest)
+# skill already matches the destination AND the recorded ship-list (.hardmode-manifest)
 # is current. Files a USER added are ignored (and preserved); files a PREVIOUS kit
 # version shipped are tracked in the manifest so upgrades can prune them — a stale
 # formerly-shipped checklist sitting next to the current one is silent drift.
 skill_unchanged() {
   local f rel
-  [ -f "$2/.fable-manifest" ] || return 1
-  diff -q <(cd "$1" && find . -type f | LC_ALL=C sort) "$2/.fable-manifest" >/dev/null 2>&1 || return 1
+  [ -f "$2/.hardmode-manifest" ] || return 1
+  diff -q <(cd "$1" && find . -type f | LC_ALL=C sort) "$2/.hardmode-manifest" >/dev/null 2>&1 || return 1
   while IFS= read -r -d '' f; do
     rel="${f#"$1"/}"
     cmp -s "$f" "$2/$rel" || return 1
@@ -50,15 +50,15 @@ skill_unchanged() {
 # in a manifest) are untouched. Runs after backup, so nothing is unrecoverable.
 prune_stale_skill_files() {
   local rel
-  [ -f "$2/.fable-manifest" ] || return 0
+  [ -f "$2/.hardmode-manifest" ] || return 0
   while IFS= read -r rel; do
     rel="${rel#./}"
     [ -n "$rel" ] || continue
     [ -f "$1/$rel" ] || rm -f "$2/$rel"
-  done < "$2/.fable-manifest"
+  done < "$2/.hardmode-manifest"
 }
 
-echo "Installing fable-protocol into $DST"
+echo "Installing hardmode into $DST"
 mkdir -p "$DST/agents" "$DST/workflows" "$DST/skills" "$DST/hooks"
 
 for f in "$SRC"/agents/*.md; do
@@ -76,7 +76,7 @@ for d in "$SRC"/skills/*/; do
   skill_unchanged "${d%/}" "$t" && { echo "  skill:    $name (unchanged)"; continue; }
   backup "$t" "skills/$name"; prune_stale_skill_files "${d%/}" "$t"
   mkdir -p "$t"; cp -r "${d%/}"/. "$t"/
-  (cd "${d%/}" && find . -type f | LC_ALL=C sort) > "$t/.fable-manifest"
+  (cd "${d%/}" && find . -type f | LC_ALL=C sort) > "$t/.hardmode-manifest"
   echo "  skill:    $name"
 done
 for f in "$SRC"/hooks/*.py; do
@@ -101,8 +101,8 @@ if [ -e "$DST/CLAUDE.md" ]; then
   if identical "$SRC/CLAUDE.md" "$DST/CLAUDE.md"; then
     echo "  doctrine: CLAUDE.md (unchanged)"
   else
-    cp "$SRC/CLAUDE.md" "$DST/CLAUDE.fable-protocol.md"
-    echo "  NOTE: $DST/CLAUDE.md already exists — wrote CLAUDE.fable-protocol.md next to it; merge manually."
+    cp "$SRC/CLAUDE.md" "$DST/CLAUDE.hardmode.md"
+    echo "  NOTE: $DST/CLAUDE.md already exists — wrote CLAUDE.hardmode.md next to it; merge manually."
   fi
 else
   cp "$SRC/CLAUDE.md" "$DST/CLAUDE.md"

@@ -21,7 +21,7 @@ def run_hook(state_dir, tool_name, tool_input=None, tool_response=None,
              session="s1", raw_stdin=None, event="PostToolUse"):
     payload = {"session_id": session, "hook_event_name": event, "tool_name": tool_name,
                "tool_input": tool_input or {}, "tool_response": tool_response or {}}
-    env = dict(os.environ, FABLE_STATE_DIR=str(state_dir))
+    env = dict(os.environ, HARDMODE_STATE_DIR=str(state_dir))
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=raw_stdin if raw_stdin is not None else json.dumps(payload),
@@ -104,11 +104,11 @@ def test_sessions_are_isolated(tmp_path):
 
 
 def test_threshold_env_lowers_trip_point(tmp_path):
-    # docs/SUCCESSION.md: smaller driver models set FABLE_LOOP_THRESHOLD=2.
-    env = {"FABLE_LOOP_THRESHOLD": "2"}
+    # docs/SUCCESSION.md: smaller driver models set HARDMODE_LOOP_THRESHOLD=2.
+    env = {"HARDMODE_LOOP_THRESHOLD": "2"}
     payload = {"session_id": "s1", "tool_name": "Bash",
                "tool_input": {"command": "pytest -q"}, "tool_response": {"exit_code": 1}}
-    full_env = dict(os.environ, FABLE_STATE_DIR=str(tmp_path), **env)
+    full_env = dict(os.environ, HARDMODE_STATE_DIR=str(tmp_path), **env)
     first = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
                            capture_output=True, text=True, timeout=30, env=full_env)
     assert first.returncode == 0
@@ -120,8 +120,8 @@ def test_threshold_env_lowers_trip_point(tmp_path):
 
 def test_threshold_env_invalid_or_out_of_range_falls_back(tmp_path):
     for i, bad in enumerate(("banana", "1", "0", "99", "")):
-        env = dict(os.environ, FABLE_STATE_DIR=str(tmp_path / f"state-{i}"),
-                   FABLE_LOOP_THRESHOLD=bad)
+        env = dict(os.environ, HARDMODE_STATE_DIR=str(tmp_path / f"state-{i}"),
+                   HARDMODE_LOOP_THRESHOLD=bad)
         payload = {"session_id": "s1", "tool_name": "Bash",
                    "tool_input": {"command": "make check"}, "tool_response": {"exit_code": 1}}
         results = [subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),

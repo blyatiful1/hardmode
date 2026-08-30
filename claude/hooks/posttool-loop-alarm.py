@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""PostToolUse / PostToolUseFailure loop-alarm hook (fable-protocol).
+"""PostToolUse / PostToolUseFailure loop-alarm hook (hardmode).
 
 Deterministic backstop for the grinding failure mode: the doctrine's "two failed
 fixes -> oracle" rule is advisory, and the benchmark showed advisory rules get
 skipped under momentum. This hook counts, per session, how many times the SAME
 shell command (Bash — and on Windows, PowerShell) has failed since the last
 successful file modification. On the 3rd
-identical failure (configurable via FABLE_LOOP_THRESHOLD; use 2 on smaller driver
+identical failure (configurable via HARDMODE_LOOP_THRESHOLD; use 2 on smaller driver
 models) it injects a one-time nudge (exit 2 -> stderr shown to the model;
 PostToolUse cannot block, the command already ran).
 
@@ -39,13 +39,13 @@ STATE_TTL_DAYS = 7
 
 
 def threshold():
-    """FABLE_LOOP_THRESHOLD overrides the default (clamped 2..10).
+    """HARDMODE_LOOP_THRESHOLD overrides the default (clamped 2..10).
 
     Smaller models grind harder: on a Sonnet/Haiku driver set it to 2 —
     the second identical failure is already the signal (docs/SUCCESSION.md).
     """
     try:
-        v = int(os.environ.get("FABLE_LOOP_THRESHOLD", ""))
+        v = int(os.environ.get("HARDMODE_LOOP_THRESHOLD", ""))
         if 2 <= v <= 10:
             return v
     except ValueError:
@@ -78,9 +78,9 @@ NUDGE = (
 
 
 def state_dir():
-    d = os.environ.get("FABLE_STATE_DIR") or os.path.join(
+    d = os.environ.get("HARDMODE_STATE_DIR") or os.path.join(
         os.environ.get("CLAUDE_DIR") or os.path.expanduser("~/.claude"),
-        "tmp", "fable-protocol")
+        "tmp", "hardmode")
     os.makedirs(d, exist_ok=True)
     return d
 

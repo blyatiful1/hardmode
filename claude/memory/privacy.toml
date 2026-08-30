@@ -1,4 +1,4 @@
-# fable-mem privacy patterns  (installed to ~/.claude/memory/privacy.toml if absent)
+# hardmode memory privacy patterns  (installed to ~/.claude/memory/privacy.toml if absent)
 #
 # WHY: the promotion boundary is project -> global memory. A "work marker" is any
 # token that must never cross into the machine-wide global corpus (`~/.claude/memory/`)

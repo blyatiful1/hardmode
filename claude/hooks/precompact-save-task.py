@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""PreCompact hook (fable-protocol): save the original request verbatim.
+"""PreCompact hook (hardmode): save the original request verbatim.
 
 The doctrine's #1 compaction rule is "preserve the original task statement
 verbatim" — but that is an instruction to a summarizer, and instructions get
@@ -20,9 +20,9 @@ SYSTEM_TAG = re.compile(r"<system-reminder>.*?</system-reminder>", re.DOTALL)
 
 
 def state_dir():
-    d = os.environ.get("FABLE_STATE_DIR") or os.path.join(
+    d = os.environ.get("HARDMODE_STATE_DIR") or os.path.join(
         os.environ.get("CLAUDE_DIR") or os.path.expanduser("~/.claude"),
-        "tmp", "fable-protocol")
+        "tmp", "hardmode")
     os.makedirs(d, exist_ok=True)
     return d
 
