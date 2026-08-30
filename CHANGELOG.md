@@ -1,5 +1,56 @@
 # Changelog
 
+## v3.0 — 2026-08-30 — the premise inversion, and the rename to *hardmode*
+
+The founding premise died. fable-protocol was written 2026-07-02 as a succession package
+so Claude **Opus 4.8** could work at Fable-5 discipline; the driver is now **Fable 5
+itself**, and Claude Code 2.1.x grew native equivalents for roughly half the kit. A
+13-agent audit (every component read, the hooks driven with synthetic payloads, the
+installer and bench run in a sandbox, ~1.9M tokens) drove this redesign.
+
+**Renamed** `fable` → `hardmode` (skill, env-var prefix `HARDMODE_*`, state dir, backup
+dir, manifest). The old name was a self-reference — a skill telling Fable 5 to "act like
+Fable 5" degenerates to "be yourself, with more steps".
+
+**Re-premised.** The doctrine now leads with mechanism, not lineage: *a deterministic
+floor plus independent verification*. The verification agents earn their cost by being
+**independent** (fresh context, refute-by-default), not by running a stronger model —
+the original *draft-cheap/verify-strong* asymmetry inverts when the driver is the
+strongest model on the machine, so workflow agents are now pinned *down* to opus/sonnet,
+never inheriting the driver. Added a "who owns what" routing table (native
+`/code-review`, `/simplify`, the web suite, the recall layer, the `oracle` ladder).
+
+**Repackaged as a native Claude Code plugin** (`.claude-plugin/plugin.json` +
+`hooks/hooks.json` via `${CLAUDE_PLUGIN_ROOT}`). Deleted `install.sh`, `tools/doctor.sh`
+and the four settings snippets — the manual `settings.json` merge they policed was the
+root cause of the machine's drift (four hooks unwired for ~8 weeks). A plugin makes that
+failure class structurally impossible and brings versioning, uninstall and eval for free.
+
+**Deleted (~49% of the tree)**, each with its replacement named:
+- **fable-mem** (mem CLI, journal/recall hooks, memory-gc/review workflows,
+  memory-search skill, 67 tests) — zero-byte corpus, never installed, displaced by the
+  operator's own recall layer. The privacy guard survives.
+- **Windows port** (install.ps1, doctor.ps1, 2 snippets, its tests) and the **small
+  tier** — never ran a live session; `--strong-model` was a no-op that lied.
+- **bench A/B** (run.sh, PROMPT.txt) — pinned to a retired model and non-discriminating
+  by its own data. The task fixture + claim-regex sync-guard stay as regression tests;
+  native `claude plugin eval --ablation` replaces the A/B.
+- **webdesign + design-variants** — superseded by the operator's web suite.
+- **big-task** — built for a small forgetful driver that no longer exists.
+- **test-weakening alarm** — measured 0 true positives in 34 real firings; the
+  claim-audit addendum keeps the rule advisory.
+
+**Hardened the surviving guard hooks** against bypasses the audit proved by probe:
+the destructive guard now judges dirtiness in the directory a command actually operates
+on (`cd`/`git -C`), scans through `bash -c`/`eval` wrappers, and blocks `rm -rf` of a
+literal system or home dir; the loop alarm no longer lets a diagnostic `tee`/redirect
+wipe its grind counter; the claim-audit gate now covers **German** completions (it was a
+silent false-pass for half the operator's messages) and stops false-blocking "resolved
+to/by" prose.
+
+Suite: 249 collected → focused set, all green; `claude plugin validate --strict` passes;
+`tools/demo.py` 4/4.
+
 ## v2.1 — 2026-07-16
 
 Adversarial re-audit. A 52-agent finder/verifier fleet plus manual review turned the kit

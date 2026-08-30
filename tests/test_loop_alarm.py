@@ -104,7 +104,7 @@ def test_sessions_are_isolated(tmp_path):
 
 
 def test_threshold_env_lowers_trip_point(tmp_path):
-    # docs/SUCCESSION.md: smaller driver models set HARDMODE_LOOP_THRESHOLD=2.
+    # A smaller/grindier driver can lower the trip point via HARDMODE_LOOP_THRESHOLD=2.
     env = {"HARDMODE_LOOP_THRESHOLD": "2"}
     payload = {"session_id": "s1", "tool_name": "Bash",
                "tool_input": {"command": "pytest -q"}, "tool_response": {"exit_code": 1}}

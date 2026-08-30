@@ -25,17 +25,18 @@ def test_relative_markdown_links_resolve():
     assert not broken, f"broken relative links: {broken}"
 
 
-def test_succession_knobs_are_real():
-    # Every config knob SUCCESSION.md tells an heir to set must exist in the code
-    # it claims to configure.
-    succession = (ROOT / "docs" / "SUCCESSION.md").read_text(encoding="utf-8")
-    loop_alarm = (ROOT / "hooks" / "posttool-loop-alarm.py").read_text(encoding="utf-8")
-    assert "HARDMODE_LOOP_THRESHOLD" in succession
-    assert "HARDMODE_LOOP_THRESHOLD" in loop_alarm
-    # ...and the workflows it routes small models to are the ones that ship.
+def test_documented_workflows_ship():
+    # Every workflow the README's delta table names as a hardmode command must exist.
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
     for wf in ("paranoid-review", "verify-claim", "deep-plan", "bug-hunt"):
-        assert wf in succession
-        assert (ROOT / "workflows" / f"{wf}.js").is_file()
+        assert f"/{wf}" in readme, wf
+        assert (ROOT / "workflows" / f"{wf}.js").is_file(), wf
+
+
+def test_loop_threshold_knob_is_real():
+    # The env knob the doctrine/design docs reference must exist in the hook.
+    loop_alarm = (ROOT / "hooks" / "posttool-loop-alarm.py").read_text(encoding="utf-8")
+    assert "HARDMODE_LOOP_THRESHOLD" in loop_alarm
 
 
 def test_oracle_carries_the_field_notes():
@@ -47,8 +48,8 @@ def test_oracle_carries_the_field_notes():
 
 
 def test_state_env_var_consistent_across_stateful_hooks():
-    # All stateful hooks must honor the same override, or SUCCESSION.md's
-    # environment advice silently applies to only some of them.
+    # All stateful hooks must honor the same override, or the documented
+    # HARDMODE_STATE_DIR advice silently applies to only some of them.
     hooks = ROOT / "hooks"
     for name in ("posttool-loop-alarm.py",
                  "precompact-save-task.py", "sessionstart-compact-recovery.py"):
