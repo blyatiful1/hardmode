@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-HOOK = Path(__file__).resolve().parents[1] / "claude" / "hooks" / "pretool-mem-privacy-guard.py"
+HOOK = Path(__file__).resolve().parents[1] / "hooks" / "pretool-mem-privacy-guard.py"
 
 
 def write_privacy(claude_dir, patterns):

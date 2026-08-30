@@ -1,0 +1,7 @@
+{
+  "//": "Keys a plugin cannot set — merge these into ~/.claude/settings.json yourself. Hook wiring lives in the plugin (hooks/hooks.json); do NOT also wire the hooks here or every event double-fires.",
+  "effortLevel": "xhigh",
+  "env": {
+    "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000"
+  }
+}

@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Syntax-check the workflow scripts in claude/workflows/.
+// Syntax-check the workflow scripts in workflows/.
 //
 // Workflow scripts are not plain ES modules: they use top-level `return`, top-level
 // `await`, and injected globals (agent, parallel, pipeline, phase, log, args, budget,
@@ -10,7 +10,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'claude', 'workflows')
+const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'workflows')
 const AsyncFunction = (async () => {}).constructor
 const GLOBALS = ['args', 'budget', 'agent', 'parallel', 'pipeline', 'phase', 'log', 'workflow']
 

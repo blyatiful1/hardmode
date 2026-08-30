@@ -4,7 +4,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parents[1] / "claude" / "hooks" / "pretool-destructive-guard.py"
+HOOK = Path(__file__).resolve().parents[1] / "hooks" / "pretool-destructive-guard.py"
 
 
 def run_hook(command, cwd=None, tool_name="Bash", raw_stdin=None):

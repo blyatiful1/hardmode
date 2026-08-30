@@ -5,7 +5,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOK = Path(__file__).resolve().parents[1] / "claude" / "hooks" / "stop-claim-audit.py"
+HOOK = Path(__file__).resolve().parents[1] / "hooks" / "stop-claim-audit.py"
 
 
 def text_entry(text):

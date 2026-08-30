@@ -10,17 +10,19 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Shell scripts parse
-        run: bash -n install.sh tools/doctor.sh bench/task/verify.sh
+        run: bash -n bench/task/verify.sh
 
       - name: Python components compile
-        run: python3 -m py_compile claude/hooks/*.py bench/score.py bench/task/loglib/*.py
+        run: python3 -m py_compile hooks/*.py bench/score.py bench/task/loglib/*.py
 
-      - name: Settings snippet is valid JSON
+      - name: Plugin manifest and hook wiring are valid JSON
         run: |
           python3 - <<'EOF'
           import json
-          json.load(open("claude/settings/settings-snippet.json"))
-          print("snippet ok")
+          json.load(open(".claude-plugin/plugin.json"))
+          json.load(open("hooks/hooks.json"))
+          json.load(open("doctrine/settings-snippet.json"))
+          print("plugin json ok")
           EOF
 
       - name: Workflow scripts compile
@@ -32,7 +34,7 @@ jobs:
           import sys
           from pathlib import Path
           bad = []
-          for f in [*Path('claude/agents').glob('*.md'), *Path('claude/skills').glob('*/SKILL.md')]:
+          for f in [*Path('agents').glob('*.md'), *Path('skills').glob('*/SKILL.md')]:
               text = f.read_text()
               if not text.startswith('---') or 'name:' not in text or 'description:' not in text:
                   bad.append(str(f))
@@ -46,13 +48,8 @@ jobs:
           python3 -m pip -q install pytest
           python3 -m pytest tests/ -q
 
-      - name: Install script end-to-end (twice, idempotent)
-        run: |
-          CLAUDE_DIR=/tmp/fake-claude ./install.sh > /dev/null
-          CLAUDE_DIR=/tmp/fake-claude ./install.sh | grep -q 'unchanged'
-          test -f /tmp/fake-claude/skills/fable/SKILL.md
-          # backups must never create loadable duplicates inside skills/
-          test "$(ls /tmp/fake-claude/skills | wc -l)" = "$(ls claude/skills | wc -l)"
+      - name: Hook demo self-test
+        run: python3 tools/demo.py
 
       - name: Bench anchor — pristine task scores 1/15
         run: |

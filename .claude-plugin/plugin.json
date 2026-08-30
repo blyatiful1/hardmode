@@ -1,0 +1,13 @@
+{
+  "name": "hardmode",
+  "displayName": "Hardmode",
+  "version": "3.0.0",
+  "description": "A deterministic discipline floor for Claude Code: claim-audit gate, destructive-command guard, loop alarm, compaction recovery, memory privacy guard — plus independent-verification agents (verifier, plan-critic, oracle), the staged /hardmode protocol, and refute-by-default review workflows.",
+  "author": {
+    "name": "crocco"
+  },
+  "repository": "https://github.com/blyatiful1/fable-protocol",
+  "license": "MIT",
+  "keywords": ["discipline", "hooks", "verification", "claude-code"],
+  "workflows": "./workflows"
+}

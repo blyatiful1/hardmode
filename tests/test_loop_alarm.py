@@ -6,7 +6,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-HOOKS = Path(__file__).resolve().parents[1] / "claude" / "hooks"
+HOOKS = Path(__file__).resolve().parents[1] / "hooks"
 HOOK = HOOKS / "posttool-loop-alarm.py"
 
 

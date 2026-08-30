@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live demo of the hardmode deterministic hooks (stdlib-only, cross-platform).
 
-Runs the ACTUAL shipped hooks (../claude/hooks/*.py, resolved relative to this
+Runs the ACTUAL shipped hooks (../hooks/*.py, resolved relative to this
 script) as subprocesses against synthetic payloads, in a throwaway sandbox
 (tempfile HARDMODE_STATE_DIR + a scratch `git init` repo for the guard's dirty-tree
 checks). Never touches ~/.claude or any real state: every hook run has its
@@ -30,7 +30,7 @@ for _stream in (sys.stdout, sys.stderr):
     except Exception:
         pass
 
-HOOKS = Path(__file__).resolve().parent.parent / "claude" / "hooks"
+HOOKS = Path(__file__).resolve().parent.parent / "hooks"
 STATE_DIR = ""  # a fresh tempdir, assigned in main(); no real state is ever touched
 
 
