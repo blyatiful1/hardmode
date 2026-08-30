@@ -4,7 +4,7 @@
 
 **A deterministic discipline floor for Claude Code — plus independent verification where being wrong is expensive.**
 
-[![ci](https://github.com/blyatiful1/fable-protocol/actions/workflows/ci.yml/badge.svg)](https://github.com/blyatiful1/fable-protocol/actions/workflows/ci.yml)
+[![ci](https://github.com/blyatiful1/hardmode/actions/workflows/ci.yml/badge.svg)](https://github.com/blyatiful1/hardmode/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Hooks that fire where discipline **must** hold · agents and workflows that verify **independently** · doctrine that routes to the tools you already run
@@ -58,13 +58,19 @@ demo: 4/4 scenarios behaved as expected
 Requires Claude Code with plugin support and Python 3 (the hooks are stdlib-only, no pip). hardmode ships as a **plugin** — no `settings.json` surgery, no drift.
 
 ```bash
-git clone https://github.com/blyatiful1/fable-protocol.git
-claude plugin install ./fable-protocol      # or add it to a marketplace and install by name
+git clone https://github.com/blyatiful1/hardmode.git
+claude plugin marketplace add ./hardmode
+claude plugin install hardmode@hardmode
 ```
 
 Then merge the two keys a plugin cannot set into `~/.claude/settings.json` (see `doctrine/settings-snippet.json`): `effortLevel` and the output-token env var. The machine-wide doctrine lives in `doctrine/CLAUDE.md` — copy it into your `~/.claude/CLAUDE.md` and fill in the `## This machine` section.
 
-Verify the plugin loads: `claude plugin validate ./fable-protocol` and, in a fresh session, ask it to *"quote the first bullet of your Evidence-before-claims doctrine."*
+Two things worth knowing about the install:
+
+- **Do not also wire these hooks in `settings.json`.** The plugin owns them; a second copy in settings makes every event fire twice (two claim-audit blocks, a loop counter that advances twice per command).
+- **The install is a cached snapshot pinned to a commit**, not a live link to your clone — after editing the repo, run `claude plugin update hardmode`. And the first session started right after an install may not pick up the hooks yet; if they seem inert, start another session before debugging.
+
+Verify: `claude plugin validate ./hardmode`, then `python tools/demo.py` (expect 4/4), and in a fresh session ask it to *"quote the first bullet of your Evidence-before-claims doctrine."*
 
 ## What's inside
 

@@ -6,7 +6,7 @@
   "author": {
     "name": "crocco"
   },
-  "repository": "https://github.com/blyatiful1/fable-protocol",
+  "repository": "https://github.com/blyatiful1/hardmode",
   "license": "MIT",
   "keywords": ["discipline", "hooks", "verification", "claude-code"],
   "workflows": "./workflows"
