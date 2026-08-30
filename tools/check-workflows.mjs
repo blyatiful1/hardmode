@@ -66,6 +66,29 @@ function stripStringsAndComments(src) {
   return out
 }
 
+// Every agent() call must pin an explicit `model:` (opus/sonnet) — workflow agents on
+// this machine must never inherit the session driver (the most expensive model on the
+// box). Scanned on the string-stripped view, so a prompt that merely says "model:" is
+// gone and only a real opts key counts. Reports each unpinned call site (1-indexed line).
+function unpinnedAgentCalls(stripped, rawSrc) {
+  const misses = []
+  const re = /\bagent\s*\(/g
+  let m
+  while ((m = re.exec(stripped))) {
+    let depth = 0, i = m.index + m[0].length - 1 // the '('
+    const start = i
+    for (; i < stripped.length; i++) {
+      const c = stripped[i]
+      if (c === '(') depth++
+      else if (c === ')') { depth--; if (depth === 0) break }
+    }
+    if (!/\bmodel\s*:/.test(stripped.slice(start, i + 1))) {
+      misses.push(rawSrc.slice(0, m.index).split('\n').length)
+    }
+  }
+  return misses
+}
+
 let failed = false
 for (const file of readdirSync(dir).filter(f => f.endsWith('.js')).sort()) {
   const src = readFileSync(join(dir, file), 'utf8')
@@ -82,9 +105,15 @@ for (const file of readdirSync(dir).filter(f => f.endsWith('.js')).sort()) {
         throw new Error(`meta is missing required field: ${field}`)
       }
     }
-    const forbidden = FORBIDDEN.exec(stripStringsAndComments(src))
+    const stripped = stripStringsAndComments(src)
+    const forbidden = FORBIDDEN.exec(stripped)
     if (forbidden) {
       throw new Error(`uses ${forbidden[0]} — non-deterministic, breaks workflow resume`)
+    }
+    const unpinned = unpinnedAgentCalls(stripped, src)
+    if (unpinned.length) {
+      throw new Error(`agent() call(s) without an explicit model: at line(s) ${unpinned.join(', ')} `
+        + `— workflow agents must pin model: 'opus'/'sonnet', never inherit the driver`)
     }
     console.log(`ok: ${file}`)
   } catch (err) {

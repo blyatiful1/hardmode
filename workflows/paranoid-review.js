@@ -74,7 +74,7 @@ const results = await pipeline(
 Dimension: ${key} — ${focus}.
 Read the diff yourself with git, then read enough surrounding code to judge in context.
 Report EVERY real issue you find regardless of severity — a separate verification step filters findings, you do not. Do not report style preferences.`,
-    { label: `find:${key}`, phase: 'Find', schema: FINDINGS }
+    { label: `find:${key}`, phase: 'Find', schema: FINDINGS, model: 'opus' }
   ),
   (r, [key]) => {
     // A dead finder must be visible, not read as "dimension found nothing clean".
@@ -94,8 +94,10 @@ Report EVERY real issue you find regardless of severity — a separate verificat
         `Adversarially verify one code-review finding in the repository at the current working directory. Try to REFUTE it: read the actual code around it, and run it if cheap to do so.
 Finding (${f.severity}) in ${f.file}${f.line ? ':' + f.line : ''}: ${f.title} — ${f.detail}
 verdict=confirmed only if the code demonstrably has this problem; refuted if the finding is speculative or the code already handles it; unverifiable if you genuinely cannot determine either way.`,
-        // Verify strong: verifiers hold xhigh even when the session (a small driver) runs lower.
-        { label: `verify:${(f.file || key).split('/').pop()}`, phase: 'Verify', schema: VERDICT, effort: 'xhigh' }
+        // Independent verification: the `verifier` agentType is read-only, so it cannot
+        // edit the code it reviews; opus/xhigh, pinned off the driver (never inherited).
+        { label: `verify:${(f.file || key).split('/').pop()}`, phase: 'Verify', schema: VERDICT,
+          model: 'opus', effort: 'xhigh', agentType: 'verifier' }
       ).then(v => ({ ...f, dimension: key, verdict: v }))
     // A dead verifier is not a passing check: recover its finding as unverified.
     )).then(judged => judged.map((j, i) => j ?? { ...fresh[i], dimension: key, verdict: null }))

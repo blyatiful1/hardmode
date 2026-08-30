@@ -56,7 +56,7 @@ const plans = (await parallel(PHILOSOPHIES.map(([name, philosophy]) => () =>
 TASK: ${task}
 Your planning philosophy: ${name} — ${philosophy}.
 Explore the actual codebase first (read the relevant files; verify your assumptions about existing code rather than guessing). Then produce the plan. Every step must be concrete enough to execute without re-deriving intent, and the endCheck must be genuinely runnable.`,
-    { label: `plan:${name}`, phase: 'Plan', schema: PLAN }
+    { label: `plan:${name}`, phase: 'Plan', schema: PLAN, model: 'opus' }
   )
 ))).map((p, i) => p && { ...p, philosophy: PHILOSOPHIES[i][0] }).filter(Boolean)
 
@@ -77,8 +77,8 @@ const votes = (await parallel(JUDGE_LENSES.map((lens, i) => () =>
 TASK: ${task}
 ${plansText}
 Inspect the repository at the current working directory to check each plan's claims before scoring. Score each plan 0-10 through your lens with decisive notes.`,
-    // Judges are the verification layer of this workflow: hold xhigh regardless of session effort.
-    { label: `judge:${i + 1}`, phase: 'Judge', schema: SCORES, effort: 'xhigh' }
+    // Judges are the verification layer of this workflow: opus/xhigh, pinned off the driver.
+    { label: `judge:${i + 1}`, phase: 'Judge', schema: SCORES, model: 'opus', effort: 'xhigh' }
   )
 ))).filter(Boolean)
 
@@ -105,7 +105,7 @@ JUDGE VERDICTS (3 judges, different lenses):
 ${judgeNotes}
 
 The winner is PLAN ${winner + 1}. Build the final plan on its spine, but graft in any losing-plan idea or judge-flagged fix that is genuinely better. Resolve every judge-flagged defect. Output the complete final plan as markdown: numbered steps, files touched per step, risks with mitigations, and the runnable end-check. It must be executable without reading the losing plans.`,
-  { label: 'synthesize', phase: 'Synthesize' }
+  { label: 'synthesize', phase: 'Synthesize', model: 'opus', effort: 'xhigh' }
 )
 
 // A dead synthesizer must not read as an empty plan — fall back loudly to the raw winner.

@@ -84,7 +84,7 @@ for (let round = 0; round < MAX_ROUNDS && dry < 2; round++) {
       `Hunt for real bugs in ${scope}. Your lens: ${name} — ${focus}.
 Read the code deeply; report EVERY real defect you find regardless of severity — a separate verification step filters, you do not. No style nits, no hypotheticals without a triggering input.
 ${alreadyFound ? `Already found (do NOT re-report these): ${alreadyFound}` : ''}`,
-      { label: `hunt:${name}:r${round + 1}`, phase: 'Hunt', schema: BUGS }
+      { label: `hunt:${name}:r${round + 1}`, phase: 'Hunt', schema: BUGS, model: 'opus' }
     )
   ))
   // A round of dead hunters is not a clean round — a dead subagent is not a passing check.
@@ -96,10 +96,13 @@ ${alreadyFound ? `Already found (do NOT re-report these): ${alreadyFound}` : ''}
   if (deadThisRound) log(`round ${round + 1}: ${deadThisRound} of ${results.length} hunter lens(es) died — their coverage this round is missing`)
   const found = results.filter(Boolean).flatMap(r => r.bugs)
 
-  const fresh = found.filter(b => !seen.has(key(b)))
+  // Dedup ATOMICALLY (filter + add in one pass), or two lenses reporting the same
+  // defect in this SAME round both pass the filter — spawning two verifiers for one bug
+  // and double-counting it. `seen.add` returns the Set (truthy), so it never drops a
+  // genuinely-fresh finding.
+  const fresh = found.filter(b => !seen.has(key(b)) && seen.add(key(b)))
   if (!fresh.length) { dry++; log(`round ${round + 1}: nothing new (dry ${dry}/2)`); continue }
   dry = 0
-  fresh.forEach(b => seen.add(key(b)))
   log(`round ${round + 1}: ${fresh.length} fresh finding(s), verifying`)
 
   phase('Verify')
@@ -108,8 +111,10 @@ ${alreadyFound ? `Already found (do NOT re-report these): ${alreadyFound}` : ''}
       `Adversarially verify one bug report in the repository at the current working directory. Try to REFUTE it: read the code around it and, where cheap, run it with the claimed triggering input.
 Bug (${b.severity}) in ${b.file}${b.line ? ':' + b.line : ''}: ${b.title} — ${b.detail}
 verdict=confirmed only if the code demonstrably has this defect; refuted if it is speculative or already handled; unverifiable if you genuinely cannot determine either way.`,
-      // Verify strong: verifiers hold xhigh even when the session (a small driver) runs lower.
-      { label: `verify:${(b.file || '').split('/').pop()}`, phase: 'Verify', schema: VERDICT, effort: 'xhigh' }
+      // Independent verification: read-only `verifier` agentType, opus/xhigh, pinned
+      // off the driver (never inherited).
+      { label: `verify:${(b.file || '').split('/').pop()}`, phase: 'Verify', schema: VERDICT,
+        model: 'opus', effort: 'xhigh', agentType: 'verifier' }
     ).then(v => ({ ...b, verdict: v }))
   ))
   judged.forEach((j, idx) => {
