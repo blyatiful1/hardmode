@@ -1,56 +1,63 @@
 ---
 name: hardmode
-description: Run a task at Fable-5-grade discipline — the full staged protocol (explore → plan → adversarial critique → implement → empirical verify → multi-agent review → memory). Use for hard, multi-file, or high-stakes tasks; whenever the user invokes /fable, says "do it like fable", or asks for maximum quality/thoroughness/rigor. Not for trivial edits or questions.
+description: Run a task in hard mode — the staged discipline protocol (frame → explore → plan + adversarial critique → implement in verified increments → independent verify → review → bank lessons). Use for hard, multi-file, or high-stakes tasks; whenever the user invokes /hardmode, says "hard mode", or asks for maximum quality/thoroughness/rigor. Not for trivial edits or questions.
 ---
 
 # Hardmode
 
-You are running a task at maximum discipline. The steps below are the scaffolding that
-makes a strong-but-mortal model deliver Mythos-tier results: externalized planning,
-adversarial checking at every stage boundary, and evidence for every claim. Do not skip
-stages because you feel confident — feeling confident is not evidence.
+Discipline scaffolding for work that matters: externalized framing, adversarial checking
+at stage boundaries, evidence for every claim. Feeling confident is not evidence. Each
+stage ROUTES to the machinery that owns the job (doctrine: "Who owns what") — a stage
+never restates doctrine, it executes it.
 
-## Stage 0 — Frame (always)
-1. Restate the task in one sentence. List EVERY deliverable it implies as an explicit task list (TodoWrite where available, else a numbered list you re-read before finishing) — including the implicit ones (tests pass, docs updated, nothing else broken).
-2. Triage honestly: if the task is actually trivial, say so, do it directly, and stop following this protocol. Stakes decide depth.
+## Stage 0 — Frame, then triage (always)
+1. Restate the task in one sentence. List EVERY deliverable it implies as an explicit
+   task list — including the implicit ones (tests pass, docs updated, nothing else
+   broken).
+2. Triage honestly: if the task is actually trivial, say so, do it directly, and stop
+   following this protocol. Stakes decide depth — and downshift stages the moment the
+   task turns out smaller than it looked.
 
 ## Stage 1 — Explore before planning
-- Fan out Explore subagents for anything you'd otherwise grep serially; read the load-bearing files yourself.
-- Check auto-memory (MEMORY.md) for prior decisions about this project before re-deriving them.
+Read the load-bearing files yourself; delegate broad sweeps instead of grepping serially
+in your own context. Check auto-memory before re-deriving prior decisions about this
+project.
 
 ## Stage 2 — Plan, then attack the plan
-- Genuinely open-ended strategy → run `/deep-plan <task>` (3 competing plans, judged, merged). Otherwise write the plan yourself: ordered steps, files touched, and the runnable end-check that will prove success.
-- Hand the plan + the ORIGINAL request verbatim to the `plan-critic` agent. Fix blockers before writing any code. If plan-critic says WRONG APPROACH, believe it enough to check.
+Write the plan: ordered steps, files touched, and the runnable end-check that will prove
+success. (/deep-plan only when strategy is genuinely open-ended — multiple plausible
+architectures.) Hand the plan + the ORIGINAL request verbatim to `plan-critic`. Fix
+blockers before writing any code. If it says WRONG APPROACH, believe it enough to check.
 
 ## Stage 3 — Implement in verified increments
-- Smallest coherent steps; after each, run the project's canonical check — not at the end, after EACH.
-- Your style layer governs what you write: minimal code, stdlib first, no unrequested abstractions.
-- Website/web-UI deliverable? The webdesign skill carries the design decisions (view choice, brief, German-market gate) inside this protocol's stages.
-- Two failed fixes on the same symptom → stop and hand all evidence to `oracle`. Do not attempt a third blind fix.
+Smallest coherent steps; run the project's canonical check after EACH, not at the end.
+Two failed fixes on the same symptom → stop and hand all evidence to `oracle`; never a
+third blind fix. Website/web-UI deliverable → the ultraweb suite owns the design
+decisions inside these stages.
 
 ## Stage 4 — Verify like you didn't write it
-- Single small change → drive it end-to-end with /verify. Multi-file or high-stakes → `verifier` agent (fresh context, adversarial). Never both.
-- UI/desktop claims need a screenshot or driven interaction, not an assertion.
+Single small change → drive it end-to-end yourself with real inputs. Multi-file or
+high-stakes → `verifier` agent (fresh context, tries to REFUTE, subsumes the canonical
+check). One or the other, never both. UI/desktop claims need a screenshot or driven
+interaction, not an assertion.
 
 ## Stage 5 — Review before declaring victory
-- Run `/paranoid-review` on the working diff. Fix confirmed findings, re-run the canonical check, and eyeball the refuted/unverified lists for wrongly-killed findings.
+Working diff → /code-review at high effort by default; /paranoid-review when the session
+is orchestration-opted-in and the stakes justify a ~20-agent fan-out. Fix confirmed
+findings, re-run the canonical check, and eyeball the refuted/unverified lists for
+wrongly-killed findings.
 
 ## Stage 6 — Report and bank the lessons
-- Final message: outcome first, every claim backed by a command you ran this session (terse evidence — decisive lines only). Anything unproven is labeled "unverified".
-- Re-read the original request one last time and check the task list: every deliverable shipped?
-- Non-obvious lessons (surprising root cause, dead-end approach, environment quirk) → postmortem skill → auto-memory.
+Final message: outcome first, every claim backed by a command run this session (terse
+evidence — decisive lines only); anything unproven is labeled "unverified". Re-read the
+original request one last time against the task list: every deliverable shipped?
+Non-obvious lessons → postmortem skill — and register memdb keywords, or the banked
+memory is invisible to recall.
 
-## Workflow stages honor the orchestration gate
-The /deep-plan and /paranoid-review stages use the Workflow tool, which is the user's
-money — so they run ONLY when the session is opted in (the user typed "ultracode", the
-user invoked /hardmode or another slash command that explicitly instructs Workflow/
-orchestration use, or the user asked for orchestration in their own words).
-When this skill fired on its own auto-trigger, or the Workflow tool is otherwise
-unavailable, do the SAME stage with Agent-tool subagents (3 refuters / plan critic /
-per-dimension reviewers spawned directly) — degrade the machinery, never the rigor.
-Invoking a skill does not by itself authorize Workflow runs.
-
-## Cost honesty
-This protocol multiplies agent spend. That is the point — but say what it cost when
-you're done (agents spawned, roughly what they did), and downshift stages the moment
-the task turns out smaller than it looked.
+## Orchestration and cost
+Workflow-tool stages run ONLY under the opt-in rule (the orchestrate skill owns it);
+invoking this skill does not by itself authorize Workflow runs. Without the opt-in, run
+the same stage with Agent-tool subagents — degrade the machinery, never the rigor.
+Every workflow agent() call pins `model: 'opus'` or `'sonnet'`. This protocol multiplies
+agent spend on purpose — say what it cost when you're done (agents spawned, roughly what
+they did).
