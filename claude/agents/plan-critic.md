@@ -2,6 +2,7 @@
 name: plan-critic
 description: Attacks an implementation plan before work starts. Use PROACTIVELY before any multi-file, unfamiliar, or risky implementation. Give it the plan plus the original user request verbatim. It finds wrong assumptions, missing steps, breakage risks, and cheaper paths — before they cost hours.
 tools: Read, Grep, Glob, Bash
+model: opus
 effort: xhigh
 ---
 

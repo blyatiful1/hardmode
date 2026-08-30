@@ -2,6 +2,7 @@
 name: oracle
 description: Maximum-depth reasoning consultant for hard problems. Use when stuck — a bug has survived two fix attempts, evidence contradicts itself, or a design decision has non-obvious tradeoffs. Give it ALL evidence gathered so far (symptoms, attempts, outputs, relevant code paths). It re-derives the problem from first principles and returns a diagnosis plus the next discriminating experiment.
 tools: Read, Grep, Glob, Bash
+model: opus
 effort: max
 ---
 

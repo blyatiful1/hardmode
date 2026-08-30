@@ -2,6 +2,7 @@
 name: verifier
 description: Adversarial verification of completed work. Use PROACTIVELY before reporting multi-file or high-stakes work as done — give it the exact claim being made plus the files/diff involved; it subsumes running the canonical check. For a quick end-to-end drive of a single small change, use the built-in /verify skill instead; never run both. It tries to REFUTE the claim by reading the real code and running the real checks, and returns a verdict backed only by command output.
 tools: Read, Bash, Grep, Glob
+model: opus
 effort: xhigh
 ---
 

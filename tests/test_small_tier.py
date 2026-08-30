@@ -37,10 +37,14 @@ def run_install(tmp_path, *flags):
 
 
 @requires_bash
-def test_default_install_does_not_pin_models(tmp_path):
+def test_default_install_pins_agent_models(tmp_path):
+    """Agents ship pinned (workflow-model policy: subagents never inherit the driver)."""
     dst, _ = run_install(tmp_path)
-    for agent in (dst / "agents").glob("*.md"):
-        assert "\nmodel:" not in agent.read_text(), f"{agent.name} unexpectedly pinned"
+    agents = list((dst / "agents").glob("*.md"))
+    assert agents, "no agents installed"
+    for agent in agents:
+        fm = agent.read_text().split("---")[1]
+        assert "\nmodel: opus\n" in fm, f"{agent.name} not pinned: {fm!r}"
 
 
 @requires_bash
