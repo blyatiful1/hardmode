@@ -39,6 +39,17 @@ def test_loop_threshold_knob_is_real():
     assert "HARDMODE_LOOP_THRESHOLD" in loop_alarm
 
 
+def test_all_agents_pin_a_model():
+    # The verification agents must ship pinned to a model independent of the driver
+    # (workflow-model policy: a subagent never inherits Fable). This invariant lost its
+    # guard when the installer test was deleted; keep it here.
+    agents = list((ROOT / "agents").glob("*.md"))
+    assert agents, "no agent files found"
+    for agent in agents:
+        fm = agent.read_text(encoding="utf-8").split("---")[1]
+        assert "\nmodel:" in fm, f"{agent.name} ships without a model pin"
+
+
 def test_oracle_carries_the_field_notes():
     # The diagnostic priors must live where they are read at the moment of need,
     # not only in the docs.
