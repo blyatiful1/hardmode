@@ -200,9 +200,10 @@ _RM_CATASTROPHIC = re.compile(
 
 
 def _abs_catastrophic(t):
-    """True iff a target string resolves to a whole system directory or the literal home
-    dir (`/usr`, `/home/<user>`) — the case the enumerated-shape regex misses when the
-    model expands the path itself. A nested path under one of these is NOT catastrophic."""
+    """True iff a target string resolves to root, a whole system directory, or the
+    literal home dir (`/`, `//`, `/usr`, `/usr/..`, `/home/<user>`) — the cases the
+    enumerated-shape regex misses when the model expands or denormalizes the path
+    itself. A nested path under one of these is NOT catastrophic."""
     s = t.strip().strip('"').strip("'")
     if _HOME:
         if s.startswith("${HOME}"):
@@ -211,10 +212,17 @@ def _abs_catastrophic(t):
             s = _HOME + s[5:]
         elif s == "~" or s.startswith("~/"):
             s = _HOME + s[1:]
-    s = re.sub(r"/+\*?$", "", s)          # drop a trailing / or /*
+    if s.endswith("/*"):
+        s = s[:-1]                        # "/usr/*" -> "/usr/", "/*" -> "/"
     if not s.startswith("/"):
         return False
-    return s in _CATASTROPHIC_ABS or (_HOME is not None and s == _HOME)
+    # Collapse leading // (POSIX-normpath would keep exactly two) and resolve . / ..,
+    # so `rm -rf //`, `/usr/..`, `/home/../home` reduce to their real target.
+    norm = os.path.normpath(re.sub(r"^/+", "/", s))
+    if norm == "/":
+        return True
+    return norm in _CATASTROPHIC_ABS or (
+        _HOME is not None and norm == os.path.normpath(_HOME))
 
 
 def _target_catastrophic(t):
@@ -258,11 +266,12 @@ def dirty_paths(cwd):
 
 
 # A tree-destroyer's dirtiness must be judged in the directory it actually operates on,
-# not only the harness cwd: `cd repo && git reset --hard` and `git -C repo reset --hard`
-# both destroy work in `repo` while the harness cwd may be a clean/non-repo dir. Collect
-# every directory the command names and check them all.
-_CD_TARGET = re.compile(r"\bcd\s+([^\s;|&]+)")
+# not only the harness cwd: `cd repo && git reset --hard`, `pushd repo; …`, and
+# `git -C repo …` / `git --work-tree repo …` all destroy work in `repo` while the
+# harness cwd may be a clean/non-repo dir. Collect every directory the command names.
+_CD_TARGET = re.compile(r"\b(?:cd|pushd)\s+([^\s;|&]+)")
 _GIT_C_TARGET = re.compile(r"\bgit\b[^;|&]*?\s-C\s+([^\s;|&]+)")
+_GIT_WORKTREE = re.compile(r"--work-tree[=\s]+([^\s;|&]+)")
 
 
 def _resolve_dir(path, cwd):
@@ -278,7 +287,7 @@ def _resolve_dir(path, cwd):
 
 def _candidate_dirs(quote_blanked, cwd):
     dirs = [cwd] if cwd else []
-    for pat in (_CD_TARGET, _GIT_C_TARGET):
+    for pat in (_CD_TARGET, _GIT_C_TARGET, _GIT_WORKTREE):
         for m in pat.finditer(quote_blanked):
             dirs.append(_resolve_dir(m.group(1), cwd))
     return dirs

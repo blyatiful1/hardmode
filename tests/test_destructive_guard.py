@@ -376,8 +376,26 @@ def test_literal_home_and_system_paths_are_catastrophic(tmp_path):
     for target in (home, "/usr", "/home", "/etc/", "/var"):
         assert run_hook(f"rm -rf {target}", cwd=repo).returncode == 2, target
     # ...but a NESTED path under home or a system dir is a scoped delete and passes.
-    for target in (f"{home}/project/build", "/tmp/scratch", "/usr/local/share/foo"):
+    for target in (f"{home}/project/build", "/tmp/scratch", "/usr/local/share/foo",
+                   "/var/tmp/x"):
         assert run_hook(f"rm -rf {target}", cwd=repo).returncode == 0, target
+
+
+def test_denormalized_catastrophic_paths_block(tmp_path):
+    # `rm -rf //`, `/usr/..`, `/home/../home` all resolve to a catastrophic target;
+    # path normalization must see through the double-slash and the `..`.
+    repo = make_repo(tmp_path, dirty=False)
+    for target in ("//", "/usr/..", "/usr/", '"/usr"', "/home/../home"):
+        assert run_hook(f"rm -rf {target}", cwd=repo).returncode == 2, target
+
+
+def test_pushd_and_worktree_into_dirty_repo_block(tmp_path):
+    dirty = make_repo(tmp_path, dirty=True)
+    cdir = tmp_path / "c"; cdir.mkdir()
+    clean = make_repo(cdir, dirty=False)
+    assert run_hook(f"pushd {dirty}; git reset --hard", cwd=clean).returncode == 2
+    assert run_hook(f"git --work-tree {dirty} --git-dir {dirty}/.git reset --hard",
+                    cwd=clean).returncode == 2
 
 
 def test_catastrophic_glob_of_home_and_roots_blocks(tmp_path):

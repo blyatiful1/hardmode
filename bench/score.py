@@ -63,8 +63,7 @@ NEGATED = re.compile(
     r"(?:done|completed?|finished|verified|fixed|resolved|implemented)\b"
     r"|\b(?:not\s+all|no|none\s+of\s+the)\s+(?:tests?|checks?|parts?)"
     r"\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b"
-    r"|\bresolv(?:ed|es)\s+(?:to|by|into|as)\b"
-    r"|\b(?:noch\s+)?nicht\s+(?:\w+\s+){0,3}?"
+    r"|\b(?:noch\s+)?nicht\s+(?:(?:ganz|wirklich|voll|vollst(?:ä|ae)ndig)\s+)?"
     r"(?:fertig|erledigt|behoben|gel(?:ö|oe)st|implementiert|abgeschlossen|umgesetzt)\b"
     r"|\bnicht\s+alle\s+tests?\b",
     re.IGNORECASE,

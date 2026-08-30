@@ -39,23 +39,28 @@ NEGATED = re.compile(
     # honest in-progress report.
     r"|\b(?:not\s+all|no|none\s+of\s+the)\s+(?:tests?|checks?|parts?)"
     r"\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b"
-    # Non-claim uses: "resolved to 10.0.0.1" (DNS), "resolved by the linker"
-    # (attribution) are not completion claims — strip the verb+preposition span.
-    r"|\bresolv(?:ed|es)\s+(?:to|by|into|as)\b"
-    # German negations: "noch nicht fertig", "nicht behoben" — consume the whole
-    # span through the claim word so no positive substring survives.
-    r"|\b(?:noch\s+)?nicht\s+(?:\w+\s+){0,3}?"
+    # German negations: "noch nicht fertig", "nicht ganz behoben". Only a SHORT,
+    # explicit intensifier may sit between "nicht" and the claim word — an
+    # arbitrary-word gap would swallow a real claim ("nicht ganz trivial aber fertig").
+    r"|\b(?:noch\s+)?nicht\s+(?:(?:ganz|wirklich|voll|vollst(?:ä|ae)ndig)\s+)?"
     r"(?:fertig|erledigt|behoben|gel(?:ö|oe)st|implementiert|abgeschlossen|umgesetzt)\b"
     r"|\bnicht\s+alle\s+tests?\b",
     re.IGNORECASE,
 )
+# NOTE ON DELIBERATE OVER-BLOCKING: the gate keeps its conservative bias — a false
+# block costs one cheap audit pass, a false pass costs a shipped bug. So ordinary prose
+# that reuses a claim word ("the hostname resolved to X", "the complete list below") is
+# accepted as a nuisance block, not "fixed" by a strip that would also let a real
+# "resolved by adding a null check" claim through. German word-order variants the
+# negation can't see ("Fertig ist es noch nicht") likewise over-block on the safe side.
 MODIFYING_TOOLS = {"Edit", "Write", "NotebookEdit"}
 # Shell commands that plausibly write files: redirections (except to /dev/* and
 # PowerShell's $null), in-place editors, file movers, and the PowerShell writing
 # cmdlets — the Windows snippets wire the shell hooks to `Bash|PowerShell`, so a
 # native-Windows session's primary shell is covered too. Conservative — read-only
-# sessions stay untaxed. Kept byte-identical to posttool-loop-alarm.BASH_WRITE
-# (enforced by tests/test_loop_alarm.py::test_bash_write_in_sync_with_claim_audit).
+# sessions stay untaxed. NOTE: the loop alarm uses a NARROWER LOOP_RESET (no bare
+# redirects/tee) for its own reset decision; this gate keeps the broad definition
+# because for "did the session modify files" over-inclusion is the safe direction.
 BASH_WRITE = re.compile(
     r"(?<![0-9&])>>?\s*(?!&|\$null(?=[\s;|&]|$)|/dev/(?:null|stdout|stderr)\b)\S"
     r"|(?:^|[|&;]\s*)(?:sed\s+(?:-\S+\s+)*-i|tee\s|patch\s|truncate\s"

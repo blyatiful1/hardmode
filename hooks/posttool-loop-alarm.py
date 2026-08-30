@@ -20,12 +20,17 @@ EVENT MODEL (verified against Claude Code 2.1.207 — DO NOT REGRESS)
     the grind counter. The pre-2.1 shape (exit codes inside a PostToolUse
     tool_response) is still honoured via failed() so the hook works on both.
 
-Key design point: a SUCCESSFUL file modification (Edit/Write/NotebookEdit, or a
-succeeding file-writing Bash command) clears all counts — re-running a check after
-a change is legitimate iteration. A FAILING write-command does NOT reset (a write
-that keeps failing is itself a grind — the CONF0 bug this replaces let such a
-command clear its own count on every run). Only "same command, still failing,
-nothing successfully changed in between" accumulates.
+Key design point: a SUCCESSFUL source modification clears all counts — re-running a
+check after a real change is legitimate iteration. The reset signal is the Edit/Write/
+NotebookEdit tools, or a succeeding shell command that mutates SOURCE (sed -i, patch,
+mv/cp, a git file op, a PowerShell content cmdlet — see LOOP_RESET). It deliberately
+does NOT reset on a bare `>`/`>>` redirect or `tee`: the model's normal mid-grind move
+is to pipe a failing check to a log (`pytest -q 2>&1 | tee out.log`), and treating that
+as progress let one diagnostic redirect wipe the whole grind count and defeat the alarm.
+The trade is one-sided on purpose — a rare source edit done via a shell redirect
+(`echo … > file.py`) will not reset, costing at most one spurious nudge; a diagnostic
+redirect can never disarm the alarm. A FAILING command never resets. Only "same command,
+still failing, nothing successfully changed in between" accumulates.
 """
 import json
 import os

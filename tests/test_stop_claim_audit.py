@@ -66,16 +66,27 @@ def test_german_in_progress_reports_do_not_block(tmp_path):
         assert r.returncode == 0, msg
 
 
-def test_resolved_to_prose_does_not_block(tmp_path):
-    # "resolved to/by" is DNS/attribution prose, not a completion claim.
-    for msg in ("The hostname resolved to 10.0.0.1 after the edit.",
-                "The symbol resolved by the linker points at the wrong section."):
+def test_resolved_claims_still_block(tmp_path):
+    # "resolved by <doing X>" IS a completion claim and must block — the gate keeps its
+    # conservative bias rather than strip 'resolved' out of real claims.
+    for msg in ("The bug is resolved.",
+                "The crash was resolved by adding a null check.",
+                "The failing test was resolved by rewriting the fixture."):
         r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")], last_message=msg)
-        assert r.returncode == 0, msg
-    # ...but a bare "the bug is resolved" is still a claim.
+        assert r.returncode == 2, msg
+
+
+def test_german_negation_does_not_swallow_a_following_claim(tmp_path):
+    # "nicht ganz trivial aber fertig" is a claim — the negation strip must not consume
+    # an arbitrary-word gap up to 'fertig' and turn it into a false pass.
+    for msg in ("Der Fix ist nicht ganz trivial aber fertig.",
+                "Das war nicht so schwer, alles fertig."):
+        r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")], last_message=msg)
+        assert r.returncode == 2, msg
+    # ...but a direct "nicht (ganz) fertig" is still an honest in-progress report.
     r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")],
-                 last_message="The bug is resolved.")
-    assert r.returncode == 2
+                 last_message="Der Fix ist nicht ganz fertig.")
+    assert r.returncode == 0
 
 
 def test_fires_only_once(tmp_path):
