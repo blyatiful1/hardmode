@@ -21,7 +21,7 @@ def test_demo_runs_green_and_narrates_a_block():
     assert r.returncode == 0, r.stdout + r.stderr
     assert "BLOCKED (claim-audit gate)" in r.stdout
     assert "scenarios behaved as expected" in r.stdout
-    assert "5/5 scenarios behaved as expected" in r.stdout
+    assert "4/4 scenarios behaved as expected" in r.stdout
 
 
 def test_list_prints_names_without_running_scenarios():

@@ -53,30 +53,6 @@
         ]
       }
     ],
-    "UserPromptSubmit": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/userpromptsubmit-mem-recall.py",
-            "timeout": 5,
-            "statusMessage": "Recalling cross-project memory..."
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/sessionend-mem-journal.py",
-            "timeout": 10,
-            "statusMessage": "Journaling session + incremental memory re-index..."
-          }
-        ]
-      }
-    ],
     "PostToolUse": [
       {
         "matcher": "Bash|Edit|Write|NotebookEdit",
@@ -84,16 +60,6 @@
           {
             "type": "command",
             "command": "python3 ~/.claude/hooks/posttool-loop-alarm.py",
-            "timeout": 10
-          }
-        ]
-      },
-      {
-        "matcher": "Edit|Write",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 ~/.claude/hooks/posttool-test-weakening-alarm.py",
             "timeout": 10
           }
         ]

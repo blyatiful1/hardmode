@@ -105,16 +105,38 @@ def test_doctor_fails_on_partial_multi_event_merge(tmp_path):
     assert "posttool-loop-alarm.py" in r.stdout and "PostToolUseFailure" in r.stdout
 
 
-def test_doctor_warns_on_windows_python_settings(tmp_path):
-    # Finding 5: a Windows snippet (bare `python`) merged on a POSIX box has hooks
-    # that never fire; doctor.sh must warn, mirroring doctor.ps1's python3 guard.
+def test_doctor_warns_on_bare_python_settings(tmp_path):
+    # A settings merge that invokes bare `python` (the old Windows-snippet mistake)
+    # has hooks that never fire on most POSIX boxes; doctor.sh must warn.
     claude = tmp_path / "claude"
     r = run(INSTALL, claude)
     assert r.returncode == 0
-    win = json.loads((ROOT / "claude" / "settings" / "settings-snippet-windows.json").read_text())
-    (claude / "settings.json").write_text(json.dumps(win))
+    snippet = (ROOT / "claude" / "settings" / "settings-snippet.json").read_text()
+    bare = json.loads(snippet.replace("python3 ", "python "))
+    (claude / "settings.json").write_text(json.dumps(bare))
     r = run(DOCTOR, claude, state_dir=tmp_path / "state")
     assert "bare 'python'" in r.stdout, r.stdout
+
+
+def test_install_ships_pinned_agents(tmp_path):
+    # Agents ship pinned (workflow-model policy: subagents never inherit the driver).
+    claude = tmp_path / "claude"
+    r = run(INSTALL, claude)
+    assert r.returncode == 0, r.stderr
+    agents = list((claude / "agents").glob("*.md"))
+    assert agents, "no agents installed"
+    for agent in agents:
+        fm = agent.read_text().split("---")[1]
+        assert "\nmodel: opus\n" in fm, f"{agent.name} not pinned: {fm!r}"
+
+
+def test_unknown_flag_fails_loudly(tmp_path):
+    r = subprocess.run(
+        ["bash", str(INSTALL), "--bogus"],
+        env=dict(os.environ, CLAUDE_DIR=str(tmp_path / "x")),
+        capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode != 0
 
 
 def test_doctor_warns_on_drifted_component(tmp_path):

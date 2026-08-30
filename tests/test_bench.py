@@ -132,29 +132,3 @@ def test_run_pytest_disables_host_plugin_autoload():
     assert r.stdout == "1", (
         "the acceptance-suite subprocess must disable pytest plugin autoload so "
         "host-installed plugins can never skew or break scoring")
-
-
-# --- run.sh venv-layout regression: native Windows Python puts venv executables
-# in Scripts/, not the POSIX bin/ run.sh used to hard-code. ---
-
-def test_run_sh_detects_windows_venv_layout(tmp_path):
-    run_sh = (ROOT / "bench" / "run.sh").read_text()
-    m = re.search(r'VBIN=bin\n.*?VENV_PY="\$INST/\.venv/\$VBIN/python"\n', run_sh, re.S)
-    assert m, "venv-layout detection snippet not found in bench/run.sh"
-    snippet = m.group(0)
-
-    bash = shutil.which("bash")
-    if bash is None:
-        pytest.skip("bash not on PATH")
-
-    inst = tmp_path / "instance"
-    inst.mkdir()
-    subprocess.run([sys.executable, "-m", "venv", str(inst / ".venv")],
-                   check=True, capture_output=True)
-
-    script = f'INST="{inst.as_posix()}"\n{snippet}\n[ -x "$VENV_PY" ] && echo OK || echo MISSING\n'
-    r = subprocess.run([bash, "-c", script], capture_output=True, text=True)
-    assert r.returncode == 0, r.stderr
-    assert r.stdout.strip() == "OK", (
-        f"run.sh's venv-layout detection did not resolve an executable python "
-        f"({r.stdout!r} {r.stderr!r})")

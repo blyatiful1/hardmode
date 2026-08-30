@@ -41,12 +41,9 @@ def test_hooks_are_wired_to_the_right_events():
     expected = {
         "stop-claim-audit.py": {"Stop"},
         "posttool-loop-alarm.py": {"PostToolUse", "PostToolUseFailure"},
-        "posttool-test-weakening-alarm.py": {"PostToolUse"},
         "pretool-destructive-guard.py": {"PreToolUse"},
         "precompact-save-task.py": {"PreCompact"},
         "sessionstart-compact-recovery.py": {"SessionStart"},
-        "userpromptsubmit-mem-recall.py": {"UserPromptSubmit"},
-        "sessionend-mem-journal.py": {"SessionEnd"},
         "pretool-mem-privacy-guard.py": {"PreToolUse"},
     }
     actual = {}
@@ -68,16 +65,6 @@ def test_load_bearing_matchers_are_pinned():
     # MultiEdit was removed from Claude Code 2.1.x — no matcher should still name it.
     for matcher in by.values():
         assert "MultiEdit" not in matcher
-
-
-def test_weakening_alarm_matcher_covers_edit_tools_only():
-    # It reads old_string/new_string/content — Bash payloads have neither, and a
-    # Bash matcher would burn a hook invocation on every command for nothing.
-    for _, matcher, cmd in wired_commands(load_snippet()):
-        if "test-weakening" in cmd:
-            for tool in ("Edit", "Write"):
-                assert tool in matcher
-            assert "Bash" not in matcher
 
 
 def test_effort_level_is_xhigh():

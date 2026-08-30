@@ -154,19 +154,6 @@ def sc_loop_alarm(n):
     print("  [ok]")
 
 
-def sc_test_weakening(n):
-    print(f"\nSCENARIO {n}  greening the suite by skipping the test")
-    payload = {"session_id": "demo-weaken", "tool_name": "Edit", "tool_input": {
-        "file_path": "tests/test_payments.py",
-        "old_string": "def test_refund():",
-        "new_string": "@pytest.mark.skip(reason='todo')\ndef test_refund():"}}
-    code, _, err = run_hook("posttool-test-weakening-alarm.py", payload)
-    print('  edit:   tests/test_payments.py  adds "@pytest.mark.skip(reason=...)"')
-    print(f'  kit:    NUDGE (test-weakening alarm, exit 2) -> "{snippet(err)}"')
-    expect(code, 2, "test-weakening skip added")
-    print("  [ok]")
-
-
 def sc_compaction(n):
     print(f"\nSCENARIO {n}  context compaction must not lose the original request")
     request = "Baue das Zahlungs-Widget \U0001f355 mit Umlauten: äöüß"
@@ -189,7 +176,6 @@ SCENARIOS = [
     ("claim-audit: false completion claim is blocked; honest report passes", sc_claim_audit),
     ("destructive-guard: reflexive git reset / rm on a dirty tree", sc_destructive),
     ("loop-alarm: the same failing command three times", sc_loop_alarm),
-    ("test-weakening: a skip marker added to a test file", sc_test_weakening),
     ("compaction-recovery: original request survives a compaction", sc_compaction),
 ]
 

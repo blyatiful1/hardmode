@@ -50,7 +50,6 @@ def test_state_env_var_consistent_across_stateful_hooks():
     # All stateful hooks must honor the same override, or SUCCESSION.md's
     # environment advice silently applies to only some of them.
     hooks = ROOT / "claude" / "hooks"
-    for name in ("posttool-loop-alarm.py", "posttool-test-weakening-alarm.py",
-                 "precompact-save-task.py", "sessionstart-compact-recovery.py",
-                 "userpromptsubmit-mem-recall.py"):
+    for name in ("posttool-loop-alarm.py",
+                 "precompact-save-task.py", "sessionstart-compact-recovery.py"):
         assert "FABLE_STATE_DIR" in (hooks / name).read_text(encoding="utf-8"), name
