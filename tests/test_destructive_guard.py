@@ -337,6 +337,49 @@ def test_powershell_recurse_switch_syntax_blocks(tmp_path):
     assert run_hook("Remove-Item -rec C:\\", cwd=repo, tool_name="PowerShell").returncode == 2
 
 
+def test_cd_into_dirty_repo_from_clean_cwd_blocks(tmp_path):
+    # The destroyer runs in the directory the command cd's into, not the harness cwd.
+    # `cd <dirty> && git reset --hard` from a clean/non-repo cwd must still block.
+    dirty = make_repo(tmp_path, dirty=True)
+    cdir = tmp_path / "c"; cdir.mkdir()
+    clean = make_repo(cdir, dirty=False)
+    assert run_hook(f"cd {dirty} && git reset --hard", cwd=clean).returncode == 2
+    # cd into a genuinely clean repo still passes.
+    assert run_hook(f"cd {clean} && git reset --hard", cwd=clean).returncode == 0
+
+
+def test_git_dash_C_into_dirty_repo_blocks(tmp_path):
+    dirty = make_repo(tmp_path, dirty=True)
+    cdir = tmp_path / "c"; cdir.mkdir()
+    clean = make_repo(cdir, dirty=False)
+    assert run_hook(f"git -C {dirty} reset --hard", cwd=clean).returncode == 2
+
+
+def test_bash_c_and_eval_wrappers_are_scanned(tmp_path):
+    # A tree-destroyer wrapped in `bash -c "…"` / `eval "…"` still executes; the guard
+    # must see through the wrapper on a dirty tree.
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook('bash -c "git reset --hard"', cwd=repo).returncode == 2
+    assert run_hook("bash -c 'git reset --hard'", cwd=repo).returncode == 2
+    assert run_hook('eval "git reset --hard"', cwd=repo).returncode == 2
+    assert run_hook("sh -lc 'git clean -fd'", cwd=repo).returncode == 2
+    # A mere echo of a bash -c string is a mention, not a wrapper at command position.
+    assert run_hook("echo \"bash -c 'git reset --hard'\"", cwd=repo).returncode == 0
+
+
+def test_literal_home_and_system_paths_are_catastrophic(tmp_path):
+    # A model that expands the path itself (`rm -rf /home/<user>`, `rm -rf /usr`) was
+    # previously unguarded; the literal whole-system / whole-home target must block.
+    import os
+    home = os.path.expanduser("~")
+    repo = make_repo(tmp_path, dirty=False)
+    for target in (home, "/usr", "/home", "/etc/", "/var"):
+        assert run_hook(f"rm -rf {target}", cwd=repo).returncode == 2, target
+    # ...but a NESTED path under home or a system dir is a scoped delete and passes.
+    for target in (f"{home}/project/build", "/tmp/scratch", "/usr/local/share/foo"):
+        assert run_hook(f"rm -rf {target}", cwd=repo).returncode == 0, target
+
+
 def test_catastrophic_glob_of_home_and_roots_blocks(tmp_path):
     # `rm -rf ~/*` / `$HOME/*` / `./*` wipe the same tree as the bare target; the glob
     # form of every catastrophic target must block, not only `/*`.

@@ -9,13 +9,20 @@ operations, in two tiers:
   * working-tree destroyers (reset --hard, checkout --/-f/./.. , restore,
     switch -f/--discard-changes, clean -f) — blocked ONLY when
     `git status --porcelain` shows uncommitted or untracked work to lose;
-    on a clean tree they pass untouched.
+    on a clean tree they pass untouched. Dirtiness is judged in every
+    directory the command names — the harness cwd, a `cd <dir>` target, and
+    a `git -C <dir>` value — so `cd repo && git reset --hard` from a clean
+    cwd is still caught. A destroyer wrapped in `bash -c "…"` / `eval "…"`
+    at command position is scanned through the wrapper.
   * always-dangerous ops — `git stash drop|clear` (discards saved work),
     bare force-push in either spelling (`--force`/`-f` or a `+refspec`;
     use --force-with-lease), and recursive rm aimed at a catastrophic target
-    (/, ~, $HOME, drive roots, ., .., *) in ANY argument position — long-form
-    GNU flags and the PowerShell spellings (Remove-Item/ri/del, -Recurse and
-    its abbreviations) included — blocked regardless of tree state.
+    (/, ~, $HOME, drive roots, ., .., *, a literal whole-system dir like
+    /usr or /etc, or the literal home dir) in ANY argument position —
+    long-form GNU flags and the PowerShell spellings (Remove-Item/ri/del,
+    -Recurse and its abbreviations) included — blocked regardless of tree
+    state. A NESTED path under home or a system dir is a scoped delete and
+    passes.
 
 On native Windows the guard also receives the PowerShell tool (the Windows
 snippets match `Bash|PowerShell`): git commands are shell-identical, and the
@@ -28,11 +35,32 @@ Fails open on any error (not a git repo, git missing, malformed payload):
 a guard that can break sessions would cost more than it saves.
 """
 import json
+import os
 import re
 import subprocess
 import sys
 
 OVERRIDE = "HARDMODE_DESTRUCTIVE_OK=1"
+
+
+def _home():
+    try:
+        h = os.path.expanduser("~")
+        return h.rstrip("/") if h and h != "~" else None
+    except Exception:
+        return None
+
+
+_HOME = _home()
+# Literal absolute targets that are catastrophic to recursively delete even though they
+# are not the `/ ~ $HOME .` shapes the target regex enumerates: a model that expands the
+# path itself (`rm -rf /home/<user>`, `rm -rf /usr`) was previously unguarded. Only the
+# root itself blocks — a NESTED path (`/usr/local/share`, `/home/<user>/project/build`)
+# is a scoped delete and passes, matching the existing "specific subdir is fine" intent.
+_CATASTROPHIC_ABS = {
+    "/usr", "/etc", "/var", "/bin", "/sbin", "/lib", "/lib32", "/lib64",
+    "/boot", "/opt", "/srv", "/root", "/home", "/sys", "/proc", "/dev", "/run",
+}
 # The override only counts as an actual env-assignment prefix at the START of a shell
 # segment (after any other leading VAR=val assignments) — NOT merely mentioned anywhere
 # (a commit message or echo that contains the string must not disable the guard). It is
@@ -171,6 +199,28 @@ _RM_CATASTROPHIC = re.compile(
     re.IGNORECASE)
 
 
+def _abs_catastrophic(t):
+    """True iff a target string resolves to a whole system directory or the literal home
+    dir (`/usr`, `/home/<user>`) — the case the enumerated-shape regex misses when the
+    model expands the path itself. A nested path under one of these is NOT catastrophic."""
+    s = t.strip().strip('"').strip("'")
+    if _HOME:
+        if s.startswith("${HOME}"):
+            s = _HOME + s[7:]
+        elif s.startswith("$HOME"):
+            s = _HOME + s[5:]
+        elif s == "~" or s.startswith("~/"):
+            s = _HOME + s[1:]
+    s = re.sub(r"/+\*?$", "", s)          # drop a trailing / or /*
+    if not s.startswith("/"):
+        return False
+    return s in _CATASTROPHIC_ABS or (_HOME is not None and s == _HOME)
+
+
+def _target_catastrophic(t):
+    return bool(_RM_CATASTROPHIC.fullmatch(t)) or _abs_catastrophic(t)
+
+
 def _rm_catastrophic(rmseg, is_powershell):
     """True iff any rm/Remove-Item invocation in this segment slice carries a recursive
     flag and ANY of its targets is catastrophic. `--` ends option parsing (everything
@@ -187,7 +237,7 @@ def _rm_catastrophic(rmseg, is_powershell):
                     recursive = True
             else:
                 targets.append(t)
-        if recursive and any(_RM_CATASTROPHIC.fullmatch(t) for t in targets):
+        if recursive and any(_target_catastrophic(t) for t in targets):
             return True
     return False
 # --force / -f, plus the refspec spelling of force (`git push origin +main`) —
@@ -205,6 +255,45 @@ def dirty_paths(cwd):
         return len([ln for ln in p.stdout.splitlines() if ln.strip()])
     except Exception:
         return 0
+
+
+# A tree-destroyer's dirtiness must be judged in the directory it actually operates on,
+# not only the harness cwd: `cd repo && git reset --hard` and `git -C repo reset --hard`
+# both destroy work in `repo` while the harness cwd may be a clean/non-repo dir. Collect
+# every directory the command names and check them all.
+_CD_TARGET = re.compile(r"\bcd\s+([^\s;|&]+)")
+_GIT_C_TARGET = re.compile(r"\bgit\b[^;|&]*?\s-C\s+([^\s;|&]+)")
+
+
+def _resolve_dir(path, cwd):
+    p = path.strip().strip('"').strip("'")
+    if _HOME:
+        if p.startswith("~"):
+            p = _HOME + p[1:]
+        p = p.replace("${HOME}", _HOME).replace("$HOME", _HOME)
+    if not os.path.isabs(p) and cwd:
+        p = os.path.join(cwd, p)
+    return p
+
+
+def _candidate_dirs(quote_blanked, cwd):
+    dirs = [cwd] if cwd else []
+    for pat in (_CD_TARGET, _GIT_C_TARGET):
+        for m in pat.finditer(quote_blanked):
+            dirs.append(_resolve_dir(m.group(1), cwd))
+    return dirs
+
+
+# bash -c "…" / sh -lc '…' / eval "…" run the quoted payload as a command, so a
+# tree-destroyer wrapped that way (`bash -c "git reset --hard"`) must be scanned. Only
+# a wrapper at command position counts — `echo "bash -c 'git reset --hard'"` is a
+# mention, and its segment starts with echo, not with a wrapper keyword.
+_WRAPPER_START = re.compile(r"^\s*(?:[A-Za-z_]\w*=\S*\s+)*(?:bash|sh|zsh|dash|eval)\b")
+_WRAPPER_PAYLOAD = re.compile(r"(?:bash|sh|zsh|dash|eval)\b[^'\"]*?(['\"])(.*?)\1", re.S)
+
+
+def _wrapper_payloads(raw_segment):
+    return [m.group(2) for m in _WRAPPER_PAYLOAD.finditer(raw_segment)]
 
 
 def block(reason):
@@ -237,6 +326,11 @@ def _iter_command_slices(text, depth=0):
         if depth < 3:
             for content in _subst_contents(sq[s:e]):
                 yield from _iter_command_slices(content, depth + 1)
+            # A wrapper (bash -c / eval) at command position runs its quoted payload —
+            # recurse into it so a destroyer hidden behind the wrapper is scanned.
+            if _WRAPPER_START.match(useg):
+                for payload in _wrapper_payloads(text[s:e]):
+                    yield from _iter_command_slices(payload, depth + 1)
 
 
 def main():
@@ -294,7 +388,9 @@ def main():
                 if "--staged" not in args or "--worktree" in args or re.search(r"\s-W\b", args):
                     tree_reason = "git restore discards uncommitted modifications to the given paths"
     if tree_reason:
-        n = dirty_paths(data.get("cwd"))
+        n = 0
+        for d in _candidate_dirs(_blank_quotes(flat), data.get("cwd")):
+            n = max(n, dirty_paths(d))
         if n:
             return block(f"{tree_reason}, and git status currently shows {n} "
                          f"changed/untracked path(s) that would be lost")

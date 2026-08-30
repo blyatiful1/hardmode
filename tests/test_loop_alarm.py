@@ -190,13 +190,30 @@ def test_successful_edit_event_resets_all_counts(tmp_path):
     assert fail_event(tmp_path, "pytest -q").returncode == 0
 
 
-def test_bash_write_in_sync_with_claim_audit(tmp_path):
-    # CONF8/CONF67: the docstring claims the write heuristic is kept in sync with the
-    # claim-audit gate, but nothing enforced it. This is that guard.
+def test_loop_reset_excludes_diagnostic_redirects(tmp_path):
+    # The reset trigger must NOT fire on a bare redirect / tee (the model's normal
+    # mid-grind "pipe the failing check to a log" move) — that wipe defeated the alarm.
+    # It MUST fire on real source mutations (sed -i, Set-Content, mv/cp/patch).
     alarm = _load("posttool-loop-alarm.py")
     gate = _load("stop-claim-audit.py")
-    assert alarm.BASH_WRITE.pattern == gate.BASH_WRITE.pattern
+    for benign in ("pytest -q 2>&1 | tee out.log", "pytest -q > out.log",
+                   "make test >> build.log", "cat x.py"):
+        assert not alarm.LOOP_RESET.search(benign), benign
+    for mutation in ("sed -i 's/a/b/' x.py", "mv a.py b.py", "cp a.py b.py",
+                     "Set-Content -Path x.py -Value 'fix'", "patch < d.diff"):
+        assert alarm.LOOP_RESET.search(mutation), mutation
+    # MODIFYING_TOOLS still agrees with the claim-audit gate (tool-based reset).
     assert alarm.MODIFYING_TOOLS == gate.MODIFYING_TOOLS
+
+
+def test_succeeding_tee_does_not_reset_grind_counter(tmp_path):
+    # End-to-end proof of the closed hole: two failures, then a SUCCEEDING tee-to-log,
+    # then a third failure must still trip — the diagnostic redirect must not reset.
+    fail_event(tmp_path, "pytest -q")
+    fail_event(tmp_path, "pytest -q")
+    run_hook(tmp_path, "Bash", {"command": "pytest -q 2>&1 | tee out.log"}, {},
+             event="PostToolUse")
+    assert fail_event(tmp_path, "pytest -q").returncode == 2
 
 def test_powershell_grind_is_tracked(tmp_path):
     # Native-Windows sessions drive PowerShell as the primary shell; the alarm

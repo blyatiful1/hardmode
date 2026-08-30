@@ -56,13 +56,16 @@ MODIFYING_TOOLS = {"Edit", "Write", "NotebookEdit"}
 # The shell tools whose commands are tracked for grinding. On native Windows the
 # snippets wire this hook to the PowerShell tool too — the primary shell there.
 SHELL_TOOLS = {"Bash", "PowerShell"}
-# Same conservative "this shell command plausibly writes files" heuristic as the
-# claim-audit gate. Kept byte-identical to stop-claim-audit.BASH_WRITE and enforced
-# by tests/test_loop_alarm.py::test_bash_write_in_sync_with_claim_audit.
-BASH_WRITE = re.compile(
-    r"(?<![0-9&])>>?\s*(?!&|\$null(?=[\s;|&]|$)|/dev/(?:null|stdout|stderr)\b)\S"
-    r"|(?:^|[|&;]\s*)(?:sed\s+(?:-\S+\s+)*-i|tee\s|patch\s|truncate\s"
-    r"|(?:git\s+(?:apply|mv|rm|checkout|restore|stash))|mv\s|cp\s|rm\s"
+# A SUCCEEDING shell command counts as "moved the code forward" (and clears the grind
+# counter) ONLY when it actually mutates source: sed -i, patch, mv/cp, a git file op,
+# or a PowerShell content cmdlet. Deliberately NARROWER than the claim-audit gate's
+# BASH_WRITE — it excludes bare `>`/`>>` redirects, `tee`, and `truncate`, because the
+# model's normal mid-grind move is to pipe a failing check's output to a log
+# (`pytest -q 2>&1 | tee out.log`, `pytest > out.log`). Treating that success as a
+# reset let one diagnostic redirect wipe the whole grind count and defeat the alarm.
+LOOP_RESET = re.compile(
+    r"(?:^|[|&;]\s*)(?:sed\s+(?:-\S+\s+)*-i|patch\s"
+    r"|(?:git\s+(?:apply|mv|rm|checkout|restore|stash))|mv\s|cp\s"
     r"|(?i:set-content|add-content|out-file|new-item|move-item|copy-item"
     r"|remove-item|rename-item)\b)"
 )
@@ -163,7 +166,7 @@ def main():
     if not is_failure:
         # A SUCCESSFUL modification (or succeeding write-command) means iteration
         # moved forward — retrying checks is legitimate again, so clear everything.
-        if tool in MODIFYING_TOOLS or (tool in SHELL_TOOLS and cmd and BASH_WRITE.search(cmd)):
+        if tool in MODIFYING_TOOLS or (tool in SHELL_TOOLS and cmd and LOOP_RESET.search(cmd)):
             state["counts"] = {}
             save_state(path, state)
             return 0

@@ -48,6 +48,36 @@ def test_no_block_without_claim(tmp_path):
     assert r.returncode == 0
 
 
+def test_german_completion_claims_block(tmp_path):
+    # The user works in German; an English-only gate is a silent false-pass hole.
+    for msg in ("Fertig. Alle Tests laufen grün.",
+                "Der Bug ist behoben und alle Tests bestehen.",
+                "Das Feature ist implementiert und abgeschlossen.",
+                "Erledigt — die Umstellung ist umgesetzt."):
+        r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")], last_message=msg)
+        assert r.returncode == 2, msg
+
+
+def test_german_in_progress_reports_do_not_block(tmp_path):
+    for msg in ("Noch nicht fertig — zwei Teile fehlen.",
+                "Der Bug ist noch nicht behoben.",
+                "Nicht alle Tests laufen grün."):
+        r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")], last_message=msg)
+        assert r.returncode == 0, msg
+
+
+def test_resolved_to_prose_does_not_block(tmp_path):
+    # "resolved to/by" is DNS/attribution prose, not a completion claim.
+    for msg in ("The hostname resolved to 10.0.0.1 after the edit.",
+                "The symbol resolved by the linker points at the wrong section."):
+        r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")], last_message=msg)
+        assert r.returncode == 0, msg
+    # ...but a bare "the bug is resolved" is still a claim.
+    r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")],
+                 last_message="The bug is resolved.")
+    assert r.returncode == 2
+
+
 def test_fires_only_once(tmp_path):
     r = run_hook(tmp_path, [tool_entry("Edit", file_path="x.py")],
                  last_message="Done and verified.", stop_hook_active=True)

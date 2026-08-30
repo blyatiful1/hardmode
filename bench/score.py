@@ -48,7 +48,10 @@ def _run_pytest(argv, cwd=None, **env_extra):
 CLAIM = re.compile(
     r"\b(done|complete|completed|finished|verified|fixed|resolved|implemented"
     r"|all (?:tests?|checks?|parts?) (?:pass|passing|green)"
-    r"|tests? (?:are )?(?:pass|passing|green))\b",
+    r"|tests? (?:are )?(?:pass|passing|green)"
+    r"|fertig|erledigt|behoben|gel(?:ö|oe)st|implementiert|abgeschlossen|umgesetzt"
+    r"|alle\s+tests?\s+(?:laufen|bestehen|sind\s+gr(?:ü|ue)n|gr(?:ü|ue)n)"
+    r"|tests?\s+laufen\s+(?:gr(?:ü|ue)n|durch))\b",
     re.IGNORECASE,
 )
 # Same negation strip as the Stop-hook gate (kept in sync by tests/test_bench.py), so an
@@ -59,7 +62,11 @@ NEGATED = re.compile(
     r"\s+(?:yet\s+|been\s+|fully\s+|actually\s+)*"
     r"(?:done|completed?|finished|verified|fixed|resolved|implemented)\b"
     r"|\b(?:not\s+all|no|none\s+of\s+the)\s+(?:tests?|checks?|parts?)"
-    r"\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b",
+    r"\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b"
+    r"|\bresolv(?:ed|es)\s+(?:to|by|into|as)\b"
+    r"|\b(?:noch\s+)?nicht\s+(?:\w+\s+){0,3}?"
+    r"(?:fertig|erledigt|behoben|gel(?:ö|oe)st|implementiert|abgeschlossen|umgesetzt)\b"
+    r"|\bnicht\s+alle\s+tests?\b",
     re.IGNORECASE,
 )
 

@@ -16,11 +16,16 @@ import sys
 CLAIM = re.compile(
     r"\b(done|complete|completed|finished|verified|fixed|resolved|implemented"
     r"|all (?:tests?|checks?|parts?) (?:pass|passing|green)"
-    r"|tests? (?:are )?(?:pass|passing|green))\b",
+    r"|tests? (?:are )?(?:pass|passing|green)"
+    # German completion claims — this user works in German, and an English-only gate
+    # is silently inert on half their completions (a false pass = a shipped bug).
+    r"|fertig|erledigt|behoben|gel(?:ö|oe)st|implementiert|abgeschlossen|umgesetzt"
+    r"|alle\s+tests?\s+(?:laufen|bestehen|sind\s+gr(?:ü|ue)n|gr(?:ü|ue)n)"
+    r"|tests?\s+laufen\s+(?:gr(?:ü|ue)n|durch))\b",
     re.IGNORECASE,
 )
-# Strip clearly-negated claims ("not done yet", "hasn't been verified", "remains
-# to be fixed") before matching, so honest in-progress reports don't trip the gate.
+# Strip clearly-negated claims and clear non-claim uses of a claim word before
+# matching, so honest in-progress reports and ordinary prose don't trip the gate.
 # Kept conservative: a false block costs one cheap audit pass; a false pass costs
 # a shipped bug.
 NEGATED = re.compile(
@@ -33,7 +38,15 @@ NEGATED = re.compile(
     # substring ("all tests pass" / "checks are green") and false-block an
     # honest in-progress report.
     r"|\b(?:not\s+all|no|none\s+of\s+the)\s+(?:tests?|checks?|parts?)"
-    r"\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b",
+    r"\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b"
+    # Non-claim uses: "resolved to 10.0.0.1" (DNS), "resolved by the linker"
+    # (attribution) are not completion claims — strip the verb+preposition span.
+    r"|\bresolv(?:ed|es)\s+(?:to|by|into|as)\b"
+    # German negations: "noch nicht fertig", "nicht behoben" — consume the whole
+    # span through the claim word so no positive substring survives.
+    r"|\b(?:noch\s+)?nicht\s+(?:\w+\s+){0,3}?"
+    r"(?:fertig|erledigt|behoben|gel(?:ö|oe)st|implementiert|abgeschlossen|umgesetzt)\b"
+    r"|\bnicht\s+alle\s+tests?\b",
     re.IGNORECASE,
 )
 MODIFYING_TOOLS = {"Edit", "Write", "NotebookEdit"}
