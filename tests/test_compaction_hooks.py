@@ -43,14 +43,21 @@ HERMETIC_GIT = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=
                     GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@x")
 
 
+def git(repo, *args):
+    # Isolated from the operator's global git config; identity comes from the env, so a
+    # CI runner with no user.name/user.email configured can still commit.
+    subprocess.run(["git", "-c", "commit.gpgsign=false", *args], cwd=repo, check=True,
+                   capture_output=True, env=HERMETIC_GIT)
+
+
 def git_repo(path, dirty_name="dirty.txt"):
     path.mkdir()
-    g = lambda *a: subprocess.run(["git", "-c", "commit.gpgsign=false", *a], cwd=path, check=True,  # noqa: E731
-                                  capture_output=True, env=HERMETIC_GIT)
-    g("init", "-q", "-b", "main")
+    git(path, "init", "-q", "-b", "main")
+    git(path, "config", "user.email", "t@x")
+    git(path, "config", "user.name", "t")
     (path / "a.txt").write_text("a")
-    g("add", "-A")
-    g("commit", "-q", "-m", "init")
+    git(path, "add", "-A")
+    git(path, "commit", "-q", "-m", "init")
     if dirty_name:
         (path / dirty_name).write_text("x")
     return path
@@ -163,8 +170,8 @@ def test_recovery_injects_later_turns_and_snapshot_and_warns_on_moved_head(tmp_p
     run(SAVE, {"session_id": "s1", "transcript_path": str(t), "cwd": str(repo),
                "trigger": "manual"}, tmp_path)
     # HEAD moves between compaction and recovery (a commit happened)
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "wip"], cwd=repo, check=True, capture_output=True)
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "wip")
     r = run(RECOVER, {"session_id": "s1", "cwd": str(repo)}, tmp_path)
     assert "later correction" in r.stdout
     assert "AT compacktion time".lower() not in r.stdout.lower()  # typo guard
