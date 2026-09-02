@@ -70,8 +70,8 @@ this as a designed probe with a measured mechanism, not a leaderboard.
 
 # Re-run — 2026-07-16 (current checkpoint; the succession check running)
 
-The kit's own "On models after Opus 4.8" doctrine says to re-measure on each new checkpoint
-and retire ceremony the model has outgrown. This is that re-run, on `claude-opus-4-8` under
+The kit's rule at the time was to re-measure on each new model checkpoint and retire
+ceremony the model has outgrown. This is that re-run, on `claude-opus-4-8` under
 **Claude Code 2.1.211** (the 2026-07-02 baseline was 2.1.198), 3 stock vs 3 kitted, same
 prompt/repo/flags/scoring, sequential.
 
@@ -101,12 +101,15 @@ added no audit turns (contrast the +18% in July, which came from the gate forcin
    money and is left to whoever wants the number.
 2. **The task may also be losing power to contamination** (public since July) or genuine model
    improvement — `bench/README.md` flags both and says to re-plant fresh bugs. The mechanism the
-   kit guarantees is unchanged regardless: `tools/demo.py` and the 226-test suite show the gate,
-   guard, loop-alarm, weakening-alarm, and compaction pair firing deterministically the moment
-   their failure mode *does* occur.
+   kit guarantees is unchanged regardless: `tools/demo.py` and the hook test suite show the gate,
+   guard, loop-alarm and compaction pair firing deterministically the moment their failure
+   mode *does* occur (the test-weakening alarm measured here was later removed for 0 true
+   positives).
 
 The honest bottom line for the current checkpoint: on this task, the kit is **insurance whose
-trigger has become rare**, not a score bump. That is exactly the state the succession doctrine
+trigger has become rare**, not a score bump. That is exactly the state the re-measure rule
 tells you to expect — keep the cheap deterministic floor (it costs ~nothing when it never
 fires), and downshift the expensive ceremony first. Re-plant a harder trap, or fund a
-larger-n run, if you want this probe to discriminate again.
+larger-n run, if you want this probe to discriminate again. Since v3.1 the firing rate itself
+is measured by the ledger (`/hardmode:stats`) rather than asserted — that is a different
+question from the outcome question this probe asked.

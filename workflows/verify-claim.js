@@ -1,12 +1,16 @@
 export const meta = {
   name: 'verify-claim',
   description: 'Adversarially test one claim: 3 independent refuters with distinct lenses (empirical, source, edge-case), fail-closed majority vote',
-  whenToUse: 'Invoke as /verify-claim <claim> before acting on a diagnosis, reporting a root cause, or relying on an environment/config/third-party fact. Not for fresh implementation diffs — hand those to the verifier agent instead.',
+  whenToUse: 'Invoke as /hardmode:verify-claim <claim> before acting on a diagnosis, reporting a root cause, or relying on an environment/config/third-party fact. Not for fresh implementation diffs — hand those to the verifier agent instead.',
   phases: [{ title: 'Refute' }],
 }
 
-const claim = (typeof args === 'string' && args.trim()) ? args.trim() : null
-if (!claim) return { error: 'Usage: /verify-claim <claim to test>' }
+const SCOUT = 'hardmode:scout'   // refuters read and run; they never modify the tree
+
+const claim = (typeof args === 'string' && args.trim())
+  ? args.trim()
+  : (args && typeof args === 'object' && typeof args.claim === 'string' && args.claim.trim()) ? args.claim.trim() : null
+if (!claim) return { error: 'Usage: /hardmode:verify-claim <claim to test>' }
 
 const VERDICT = {
   type: 'object',
@@ -34,8 +38,7 @@ const votes = (await parallel(LENSES.map((lens, i) => () =>
 Claim: "${claim}"
 Work in the current directory. Cite concrete evidence for your verdict.
 verdict=refuted only with concrete evidence the claim is false; withstood only if you actively attacked it and it held; unproven if after honest effort you cannot decide — an unproven claim does not pass, but it is not disproven either.`,
-    // Refuters ARE the verification layer: opus/xhigh, pinned off the driver.
-    { label: `refute:${i + 1}`, schema: VERDICT, model: 'opus', effort: 'xhigh' }
+    { label: `refute:${i + 1}`, phase: 'Refute', schema: VERDICT, model: 'opus', effort: 'xhigh', agentType: SCOUT }
   )
 // A dead refuter is not a passing vote — count it as unproven, fail closed.
 ))).map((v, i) => ({

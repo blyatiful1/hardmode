@@ -1,124 +1,227 @@
 #!/usr/bin/env node
-// Syntax-check the workflow scripts in workflows/.
+// Lint the kit's workflow scripts (workflows/*.js) — or one script via --script <path>.
 //
 // Workflow scripts are not plain ES modules: they use top-level `return`, top-level
 // `await`, and injected globals (agent, parallel, pipeline, phase, log, args, budget,
-// workflow) — so `node --check` rejects them. Instead we compile each script body as
-// an AsyncFunction (which permits both return and await) after stripping the
-// `export ` prefix from the meta declaration. Compilation != execution: no agents run.
-import { readFileSync, readdirSync } from 'node:fs'
-import { join, dirname } from 'node:path'
+// workflow) — so `node --check` rejects them. Each script body is compiled as an
+// AsyncFunction after stripping the `export ` prefix from the meta declaration.
+// Compilation != execution: no agents run.
+//
+// Rules (each one caught a real shipped defect or a documented runtime failure):
+//   * `export const meta = {...}` must exist, be a PURE literal (no calls/spreads/
+//     template interpolation), and carry string `name` and `description`;
+//   * every phase('X') call / opts.phase 'X' must name a title in meta.phases (when
+//     meta.phases is declared);
+//   * every agent() call pins `model:` — workflow agents never inherit the driver;
+//   * every literal agentType names an agent that exists: a kit agent under its
+//     plugin-namespaced id (`hardmode:verifier` — the bare name throws at spawn),
+//     or a harness built-in;
+//   * every `schema:` is an object schema (`type: 'object'`), not a string/array;
+//   * no Date.now() / Math.random() / new Date (breaks resume);
+//   * no host APIs (require, process, console, fs, import()) — the runtime has none.
+// Line numbers are exact: the scan views are length-preserving.
+import { readFileSync, readdirSync, existsSync } from 'node:fs'
+import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-const dir = join(dirname(fileURLToPath(import.meta.url)), '..', 'workflows')
+const here = dirname(fileURLToPath(import.meta.url))
+const ROOT = join(here, '..')
 const AsyncFunction = (async () => {}).constructor
 const GLOBALS = ['args', 'budget', 'agent', 'parallel', 'pipeline', 'phase', 'log', 'workflow']
+const PLUGIN_NAME = (() => {
+  try { return JSON.parse(readFileSync(join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8')).name } catch { return 'hardmode' }
+})()
+const BUILTIN_AGENTS = ['general-purpose', 'Explore', 'Plan', 'claude', 'claude-code-guide', 'statusline-setup']
 
-// Extract the `export const meta = { ... }` object literal by brace-matching from the
-// opening brace, so meta-field checks run against the meta slice ONLY — not against a
-// `name:`/`description:` line that happens to appear in a prompt string elsewhere in
-// the script (CONF23).
-function metaLiteral(src) {
-  const m = /export const meta = \{/.exec(src)
+function kitAgents() {
+  const dir = join(ROOT, 'agents')
+  if (!existsSync(dir)) return []
+  return readdirSync(dir).filter(f => f.endsWith('.md')).map(f => {
+    const m = /^---[\s\S]*?\nname:\s*([^\n]+)/.exec(readFileSync(join(dir, f), 'utf8'))
+    return (m ? m[1].trim() : basename(f, '.md'))
+  })
+}
+
+// Two length-preserving views. `code`: strings, template text and comments blanked
+// (for FORBIDDEN / globals / model-pin / schema checks). `lit`: comments and template
+// TEXT blanked but plain quoted strings kept (for agentType / phase / meta values).
+// Regex literals are recognised in code context so a quote inside one cannot swallow
+// the rest of the file. Newlines are always kept, so offsets map 1:1 to lines.
+const REGEX_PREV = /[(,=:\[!&|?{};+\-*%<>~^]$|\breturn$|\btypeof$|\bcase$|^$/
+function views(src) {
+  let code = '', lit = ''
+  const stack = []
+  const blank = (s) => s.replace(/[^\n]/g, ' ')
+  let i = 0
+  while (i < src.length) {
+    const c = src[i], c2 = src[i + 1]
+    const top = stack[stack.length - 1]
+    if (top && top.type === 'template') {
+      if (c === '\\') { code += '  '; lit += '  '; i += 2; continue }
+      if (c === '`') { stack.pop(); code += ' '; lit += ' '; i++; continue }
+      if (c === '$' && c2 === '{') { stack.push({ type: 'interp', depth: 0 }); code += '  '; lit += '  '; i += 2; continue }
+      code += c === '\n' ? '\n' : ' '; lit += c === '\n' ? '\n' : ' '; i++; continue
+    }
+    if (c === '/' && c2 === '/') { const j = src.indexOf('\n', i); const end = j === -1 ? src.length : j; code += blank(src.slice(i, end)); lit += blank(src.slice(i, end)); i = end; continue }
+    if (c === '/' && c2 === '*') { let j = src.indexOf('*/', i + 2); j = j === -1 ? src.length : j + 2; code += blank(src.slice(i, j)); lit += blank(src.slice(i, j)); i = j; continue }
+    if (c === "'" || c === '"') {
+      let j = i + 1
+      while (j < src.length && src[j] !== c && src[j] !== '\n') { if (src[j] === '\\') j++; j++ }
+      j = Math.min(j + 1, src.length)
+      code += blank(src.slice(i, j)); lit += src.slice(i, j); i = j; continue
+    }
+    if (c === '`') { stack.push({ type: 'template' }); code += ' '; lit += ' '; i++; continue }
+    if (c === '/') {
+      const prev = code.slice(0, code.length).replace(/\s+$/, '')
+      if (REGEX_PREV.test(prev.slice(-8))) {
+        let j = i + 1, inClass = false
+        while (j < src.length && src[j] !== '\n') {
+          if (src[j] === '\\') { j += 2; continue }
+          if (inClass) { if (src[j] === ']') inClass = false }
+          else if (src[j] === '[') inClass = true
+          else if (src[j] === '/') break
+          j++
+        }
+        j = Math.min(j + 1, src.length)
+        while (j < src.length && /[a-z]/.test(src[j])) j++
+        code += blank(src.slice(i, j)); lit += blank(src.slice(i, j)); i = j; continue
+      }
+    }
+    if (top && top.type === 'interp') {
+      if (c === '{') top.depth++
+      else if (c === '}') { if (top.depth === 0) { stack.pop(); code += ' '; lit += ' '; i++; continue } top.depth-- }
+    }
+    code += c; lit += c; i++
+  }
+  return { code, lit }
+}
+
+const lineOf = (src, idx) => src.slice(0, idx).split('\n').length
+
+function metaSlice(lit) {
+  const m = /export const meta = \{/.exec(lit)
   if (!m) return null
   let depth = 0
-  const start = m.index + m[0].length - 1 // the opening brace
-  for (let i = start; i < src.length; i++) {
-    const c = src[i]
-    if (c === '{') depth++
-    else if (c === '}') { depth--; if (depth === 0) return src.slice(start, i + 1) }
+  const start = m.index + m[0].length - 1
+  for (let i = start; i < lit.length; i++) {
+    if (lit[i] === '{') depth++
+    else if (lit[i] === '}') { depth--; if (depth === 0) return { start, end: i + 1, text: lit.slice(start, i + 1) } }
   }
   return null
 }
 
-// Workflow scripts must be resumable: Date.now()/Math.random() make a run
-// non-deterministic and break the resume-from-cache contract (CONF24).
-const FORBIDDEN = /\bDate\.now\s*\(|\bMath\.random\s*\(|\bnew Date\s*\(\s*\)/
-
-// Blank out string-literal and comment CONTENT before the determinism scan, so a prompt
-// that merely MENTIONS Date.now()/Math.random() (e.g. instructing a subagent to hunt for
-// that anti-pattern) does not false-fail — while real code, INCLUDING code inside
-// template `${...}` interpolations, is still scanned (CONF25). Meta checks above keep
-// running on the raw source; only this scan needs the stripped view.
-function stripStringsAndComments(src) {
-  let out = ''
-  const stack = [] // {type:'template'} | {type:'interp', depth}
-  for (let i = 0; i < src.length; i++) {
-    const c = src[i], c2 = src[i + 1]
-    const top = stack[stack.length - 1]
-    if (top && top.type === 'template') {
-      if (c === '\\') { i++; continue }        // escape: skip next char
-      if (c === '`') { stack.pop(); continue } // end of template literal
-      if (c === '$' && c2 === '{') { stack.push({ type: 'interp', depth: 0 }); i++; continue }
-      continue                                 // drop template text
-    }
-    // code context (top level or inside a ${...} interpolation)
-    if (c === '/' && c2 === '/') { while (i < src.length && src[i] !== '\n') i++; continue }
-    if (c === '/' && c2 === '*') { i += 2; while (i < src.length && !(src[i] === '*' && src[i + 1] === '/')) i++; i++; continue }
-    if (c === "'" || c === '"') { i++; while (i < src.length && src[i] !== c) { if (src[i] === '\\') i++; i++ } out += ' '; continue }
-    if (c === '`') { stack.push({ type: 'template' }); continue }
-    if (top && top.type === 'interp') {
-      if (c === '{') top.depth++
-      else if (c === '}') { if (top.depth === 0) { stack.pop(); continue } top.depth-- }
-    }
-    out += c
+function balanced(view, open) {
+  // slice from the '(' or '{' at `open` to its matching close (in a blanked view)
+  const pairs = { '(': ')', '[': ']', '{': '}' }
+  const close = pairs[view[open]]
+  let depth = 0
+  for (let i = open; i < view.length; i++) {
+    const ch = view[i]
+    if (ch === '(' || ch === '[' || ch === '{') depth++
+    else if (ch === ')' || ch === ']' || ch === '}') { depth--; if (depth === 0) return i }
   }
-  return out
+  return view.length - 1
 }
 
-// Every agent() call must pin an explicit `model:` (opus/sonnet) — workflow agents on
-// this machine must never inherit the session driver (the most expensive model on the
-// box). Scanned on the string-stripped view, so a prompt that merely says "model:" is
-// gone and only a real opts key counts. Reports each unpinned call site (1-indexed line).
-function unpinnedAgentCalls(stripped, rawSrc) {
-  const misses = []
+const FORBIDDEN = /\bDate\.now\s*\(|\bMath\.random\s*\(|\bnew\s+Date\b/
+const HOST = /\brequire\s*\(|\bprocess\s*\.|\bconsole\s*\.|\bimport\s*\(|\bglobalThis\b|\bfs\s*\.\s*(?:read|write)/
+
+export function lint(src, { agents = [], plugin = PLUGIN_NAME } = {}) {
+  const errors = []
+  const { code, lit } = views(src)
+  const meta = metaSlice(lit)
+  if (!meta) { errors.push('missing `export const meta = {...}` declaration'); return errors }
+  const metaCode = code.slice(meta.start, meta.end)
+  if (/[(`]|\.\.\./.test(metaCode) || /\$\{/.test(src.slice(meta.start, meta.end))) {
+    errors.push(`meta must be a pure literal (no calls, spreads, template interpolation) — line ${lineOf(src, meta.start)}`)
+  }
+  for (const field of ['name', 'description']) {
+    if (!new RegExp(`\\b${field}:\\s*['"]`).test(meta.text)) errors.push(`meta is missing required string field: ${field}`)
+  }
+  // compile
+  try { new AsyncFunction(...GLOBALS, src.replace(/^export const meta/m, 'const meta')) }
+  catch (e) { errors.push(`does not compile: ${e.message}`); return errors }
+
+  const forbidden = FORBIDDEN.exec(code)
+  if (forbidden) errors.push(`uses ${forbidden[0].trim()} at line ${lineOf(src, forbidden.index)} — non-deterministic, breaks workflow resume`)
+  const host = HOST.exec(code)
+  if (host) errors.push(`uses host API ${host[0].trim()} at line ${lineOf(src, host.index)} — the workflow runtime has no Node/filesystem access`)
+
+  // phases
+  const declared = []
+  for (const m of meta.text.matchAll(/title:\s*(['"])([^'"]*)\1/g)) declared.push(m[2])
+  const phasesDeclared = /\bphases\s*:/.test(meta.text)
+  const used = []
+  for (const m of lit.matchAll(/\bphase\s*\(\s*(['"])([^'"]*)\1\s*\)/g)) used.push({ title: m[2], idx: m.index })
+  for (const m of lit.matchAll(/\bphase\s*:\s*(['"])([^'"]*)\1/g)) if (m.index < meta.start || m.index > meta.end) used.push({ title: m[2], idx: m.index })
+  if (phasesDeclared) {
+    for (const u of used) if (!declared.includes(u.title)) errors.push(`phase '${u.title}' (line ${lineOf(src, u.idx)}) is not declared in meta.phases [${declared.join(', ')}]`)
+  } else if (used.length) {
+    errors.push(`meta.phases is not declared but phase() / opts.phase is used (${[...new Set(used.map(u => u.title))].join(', ')})`)
+  }
+
+  // agent() calls: model pin + schema shape + agentType
+  const allowed = new Set([...BUILTIN_AGENTS, ...agents.map(a => `${plugin}:${a}`)])
+  const bareKit = new Set(agents)
   const re = /\bagent\s*\(/g
   let m
-  while ((m = re.exec(stripped))) {
-    let depth = 0, i = m.index + m[0].length - 1 // the '('
-    const start = i
-    for (; i < stripped.length; i++) {
-      const c = stripped[i]
-      if (c === '(') depth++
-      else if (c === ')') { depth--; if (depth === 0) break }
-    }
-    if (!/\bmodel\s*:/.test(stripped.slice(start, i + 1))) {
-      misses.push(rawSrc.slice(0, m.index).split('\n').length)
-    }
-  }
-  return misses
-}
-
-let failed = false
-for (const file of readdirSync(dir).filter(f => f.endsWith('.js')).sort()) {
-  const src = readFileSync(join(dir, file), 'utf8')
-  try {
-    const meta = metaLiteral(src)
-    if (!meta) {
-      throw new Error('missing `export const meta = {...}` declaration')
-    }
-    const body = src.replace(/^export const meta/m, 'const meta')
-    new AsyncFunction(...GLOBALS, body)
-    // Cheap meta sanity: name and description must be present as literals INSIDE meta.
-    for (const field of ['name', 'description']) {
-      if (!new RegExp(`\\b${field}:\\s*'`).test(meta)) {
-        throw new Error(`meta is missing required field: ${field}`)
+  while ((m = re.exec(code))) {
+    const open = m.index + m[0].length - 1
+    const close = balanced(code, open)
+    const argsCode = code.slice(open, close + 1)
+    const argsLit = lit.slice(open, close + 1)
+    const line = lineOf(src, m.index)
+    if (!/\bmodel\s*:/.test(argsCode)) errors.push(`agent() at line ${line} has no explicit model: — workflow agents must pin model: 'opus'/'sonnet', never inherit the driver`)
+    const at = /\bagentType\s*:\s*(?:(['"])([^'"]*)\1|([^,}\s]+))/.exec(argsLit)
+    if (at) {
+      let value = at[2]
+      if (value === undefined) {
+        // an identifier: accept it when it is a const bound to a string literal
+        const decl = new RegExp(`\\bconst\\s+${at[3].replace(/[$]/g, '\\$')}\\s*=\\s*(['"])([^'"]*)\\1`).exec(lit)
+        if (decl) value = decl[2]
+      }
+      if (value === undefined) errors.push(`agentType at line ${line} is not a string literal or a const bound to one — it cannot be checked against the agent registry`)
+      else if (!allowed.has(value)) {
+        const hint = bareKit.has(value) ? ` (plugin agents are namespaced: use '${plugin}:${value}' — the bare name throws at spawn time)` : ''
+        errors.push(`agentType '${value}' at line ${line} is not a known agent${hint}; known: ${[...allowed].join(', ')}`)
       }
     }
-    const stripped = stripStringsAndComments(src)
-    const forbidden = FORBIDDEN.exec(stripped)
-    if (forbidden) {
-      throw new Error(`uses ${forbidden[0]} — non-deterministic, breaks workflow resume`)
+    const sc = /\bschema\s*:\s*/.exec(argsCode)
+    if (sc) {
+      const after = argsCode.slice(sc.index + sc[0].length)
+      const afterLit = argsLit.slice(sc.index + sc[0].length)
+      let ok = false
+      if (after.startsWith('{')) ok = /^\{[\s\S]{0,300}?\btype\s*:\s*/.test(after) && /^\{[\s\S]{0,300}?\btype\s*:\s*['"]object['"]/.test(afterLit)
+      else {
+        const id = /^([A-Za-z_$][\w$]*)/.exec(after)
+        if (id) {
+          const decl = new RegExp(`\\b(?:const|let|var)\\s+${id[1]}\\s*=\\s*\\{`).exec(code)
+          if (decl) {
+            const end = balanced(code, decl.index + decl[0].length - 1)
+            ok = /\btype\s*:\s*['"]object['"]/.test(lit.slice(decl.index, end + 1).slice(0, 400))
+          }
+        }
+      }
+      if (!ok) errors.push(`schema at line ${line} is not an object schema (needs a literal with type: 'object', or a const bound to one)`)
     }
-    const unpinned = unpinnedAgentCalls(stripped, src)
-    if (unpinned.length) {
-      throw new Error(`agent() call(s) without an explicit model: at line(s) ${unpinned.join(', ')} `
-        + `— workflow agents must pin model: 'opus'/'sonnet', never inherit the driver`)
-    }
-    console.log(`ok: ${file}`)
-  } catch (err) {
-    console.error(`FAIL: ${file}: ${err.message}`)
-    failed = true
   }
+  return errors
 }
-process.exit(failed ? 1 : 0)
+
+function main() {
+  const argv = process.argv.slice(2)
+  const agents = kitAgents()
+  let failed = false
+  const targets = []
+  const si = argv.indexOf('--script')
+  if (si !== -1) targets.push(argv[si + 1])
+  else for (const f of readdirSync(join(ROOT, 'workflows')).filter(f => f.endsWith('.js')).sort()) targets.push(join(ROOT, 'workflows', f))
+  for (const file of targets) {
+    const errors = lint(readFileSync(file, 'utf8'), { agents })
+    if (errors.length) { failed = true; for (const e of errors) console.error(`FAIL: ${basename(file)}: ${e}`) }
+    else console.log(`ok: ${basename(file)}`)
+  }
+  process.exit(failed ? 1 : 0)
+}
+
+if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) main()

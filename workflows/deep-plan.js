@@ -1,7 +1,7 @@
 export const meta = {
   name: 'deep-plan',
   description: 'Judge-panel planning: 3 planners with competing philosophies explore the repo independently, 3 judges score every plan, one synthesizer merges the winner with the best ideas of the losers',
-  whenToUse: 'Invoke as /deep-plan <task description> when implementation strategy is genuinely open-ended — multiple plausible architectures, unfamiliar codebase, or high cost of picking wrong. For tasks with one obvious approach, plan directly instead.',
+  whenToUse: 'Invoke as /hardmode:deep-plan <task description> when implementation strategy is genuinely open-ended — multiple plausible architectures, unfamiliar codebase, or high cost of picking wrong. For tasks with one obvious approach, plan directly instead.',
   phases: [
     { title: 'Plan', detail: '3 independent planners, different philosophies' },
     { title: 'Judge', detail: '3 judges score all plans' },
@@ -9,8 +9,12 @@ export const meta = {
   ],
 }
 
-const task = (typeof args === 'string' && args.trim()) ? args.trim() : null
-if (!task) return { error: 'Usage: /deep-plan <task description>' }
+const SCOUT = 'hardmode:scout'   // read-only: planners and judges must never touch the tree
+
+const task = (typeof args === 'string' && args.trim())
+  ? args.trim()
+  : (args && typeof args === 'object' && typeof args.task === 'string' && args.task.trim()) ? args.task.trim() : null
+if (!task) return { error: 'Usage: /hardmode:deep-plan <task description>' }
 
 const PLAN = {
   type: 'object',
@@ -56,7 +60,7 @@ const plans = (await parallel(PHILOSOPHIES.map(([name, philosophy]) => () =>
 TASK: ${task}
 Your planning philosophy: ${name} — ${philosophy}.
 Explore the actual codebase first (read the relevant files; verify your assumptions about existing code rather than guessing). Then produce the plan. Every step must be concrete enough to execute without re-deriving intent, and the endCheck must be genuinely runnable.`,
-    { label: `plan:${name}`, phase: 'Plan', schema: PLAN, model: 'opus' }
+    { label: `plan:${name}`, phase: 'Plan', schema: PLAN, model: 'opus', agentType: SCOUT }
   )
 ))).map((p, i) => p && { ...p, philosophy: PHILOSOPHIES[i][0] }).filter(Boolean)
 
@@ -77,8 +81,7 @@ const votes = (await parallel(JUDGE_LENSES.map((lens, i) => () =>
 TASK: ${task}
 ${plansText}
 Inspect the repository at the current working directory to check each plan's claims before scoring. Score each plan 0-10 through your lens with decisive notes.`,
-    // Judges are the verification layer of this workflow: opus/xhigh, pinned off the driver.
-    { label: `judge:${i + 1}`, phase: 'Judge', schema: SCORES, model: 'opus', effort: 'xhigh' }
+    { label: `judge:${i + 1}`, phase: 'Judge', schema: SCORES, model: 'opus', effort: 'xhigh', agentType: SCOUT }
   )
 ))).filter(Boolean)
 
@@ -86,18 +89,24 @@ if (!votes.length) return { error: 'All judges failed — no verdict possible', 
 let omissions = 0
 const totals = plans.map((_, i) =>
   votes.reduce((sum, v) => {
-    const s = v.scores.find(s => s.plan === i + 1)
+    const s = (v.scores ?? []).find(s => s.plan === i + 1)
     if (!s) { omissions++; return sum }  // scored as 0, but visibly — never silently
     return sum + Math.max(0, Math.min(10, s.score))
   }, 0))
 if (omissions) log(`${omissions} plan score(s) omitted by judges — counted as 0`)
 const winner = totals.indexOf(Math.max(...totals))
-const judgeNotes = votes.flatMap(v => v.scores).map(s => `plan ${s.plan} (${s.score}/10): ${s.notes}`).join('\n')
+const judgeNotes = votes.flatMap(v => v.scores ?? []).map(s => `plan ${s.plan} (${s.score}/10): ${s.notes}`).join('\n')
 log(`scores: ${totals.map((t, i) => `plan${i + 1}=${t}`).join(' ')} — winner: plan ${winner + 1} (${plans[winner].philosophy})`)
 
 phase('Synthesize')
-const finalPlan = await agent(
-  `Synthesize the final implementation plan for this task.
+// The synthesizer is the one bare await in this file: guard it against the budget
+// ceiling (which THROWS) so six planner/judge results are never discarded.
+let finalPlan = null
+if (budget.total && budget.remaining() < 40_000) {
+  log('token budget nearly spent — skipping synthesis, returning the winning raw plan')
+} else {
+  finalPlan = await agent(
+    `Synthesize the final implementation plan for this task.
 TASK: ${task}
 ${plansText}
 
@@ -105,13 +114,12 @@ JUDGE VERDICTS (3 judges, different lenses):
 ${judgeNotes}
 
 The winner is PLAN ${winner + 1}. Build the final plan on its spine, but graft in any losing-plan idea or judge-flagged fix that is genuinely better. Resolve every judge-flagged defect. Output the complete final plan as markdown: numbered steps, files touched per step, risks with mitigations, and the runnable end-check. It must be executable without reading the losing plans.`,
-  { label: 'synthesize', phase: 'Synthesize', model: 'opus', effort: 'xhigh' }
-)
-
-// A dead synthesizer must not read as an empty plan — fall back loudly to the raw winner.
-if (finalPlan == null) log('synthesizer died — returning the winning plan unsynthesized; graft losing-plan ideas manually')
+    { label: 'synthesize', phase: 'Synthesize', model: 'opus', effort: 'xhigh', agentType: SCOUT }
+  ).catch(() => null)
+  if (finalPlan == null) log('synthesizer died — returning the winning plan unsynthesized; graft losing-plan ideas manually')
+}
 return {
-  finalPlan: finalPlan ?? { error: 'synthesizer died — this is the WINNING RAW PLAN, not the synthesis', ...plans[winner] },
+  finalPlan: finalPlan ?? { error: 'no synthesis — this is the WINNING RAW PLAN, not the synthesis', ...plans[winner] },
   scores: totals,
   winner: `plan ${winner + 1} (${plans[winner].philosophy})`,
   lostPlanners: PHILOSOPHIES.length - plans.length,

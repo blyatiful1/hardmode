@@ -1,8 +1,5 @@
-# Unit tests for the PreToolUse memory privacy guard.
-# Exercised as a real subprocess reading real stdin against a scratch CLAUDE_DIR.
-# The guard BLOCKS (exit 2) a write into $BASE/memory/ whose pending content hits a
-# privacy.toml pattern, and fails OPEN (exit 0) on every ambiguity — the destructive
-# guard precedent: only ever block on a positive match of configured content.
+# Unit tests for the PreToolUse memory privacy guard (real subprocess, scratch config dir).
+import importlib.util
 import json
 import os
 import subprocess
@@ -11,155 +8,204 @@ from pathlib import Path
 
 import pytest
 
-HOOK = Path(__file__).resolve().parents[1] / "hooks" / "pretool-mem-privacy-guard.py"
+ROOT = Path(__file__).resolve().parents[1]
+HOOK = ROOT / "hooks" / "pretool-mem-privacy-guard.py"
 
 
 def write_privacy(claude_dir, patterns):
     mdir = Path(claude_dir) / "memory"
     mdir.mkdir(parents=True, exist_ok=True)
-    body = "patterns = [%s]\n" % ", ".join('"%s"' % p for p in patterns)
-    (mdir / "privacy.toml").write_text(body)
+    (mdir / "privacy.toml").write_text("patterns = [%s]\n" % ", ".join('"%s"' % p for p in patterns))
 
 
-def run_hook(claude_dir, file_path=None, content=None, tool="Write",
-             tool_input=None, raw_stdin=None):
+def run_hook(claude_dir, file_path=None, content=None, tool="Write", tool_input=None,
+             raw_stdin=None, env_extra=None, cwd=None):
     if tool_input is None:
         tool_input = {}
         if file_path is not None:
             tool_input["file_path"] = str(file_path)
         if content is not None:
             tool_input["content"] = content
-    payload = {"tool_name": tool, "tool_input": tool_input}
-    env = dict(os.environ, CLAUDE_DIR=str(claude_dir))
-    return subprocess.run(
-        [sys.executable, str(HOOK)],
-        input=raw_stdin if raw_stdin is not None else json.dumps(payload),
-        capture_output=True, text=True, timeout=30, env=env,
-    )
+    payload = {"tool_name": tool, "tool_input": tool_input, "session_id": "p1"}
+    if cwd:
+        payload["cwd"] = str(cwd)
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(claude_dir), HARDMODE_STATE_DIR=str(Path(claude_dir) / "st"))
+    env.pop("CLAUDE_DIR", None)
+    env.pop("CLAUDE_CODE_REMOTE_MEMORY_DIR", None)
+    # point the plugin fallback at an EMPTY doctrine unless a test wants the shipped one
+    env["CLAUDE_PLUGIN_ROOT"] = env.get("HARDMODE_TEST_PLUGIN_ROOT", str(Path(claude_dir) / "no-plugin"))
+    if env_extra:
+        env.update(env_extra)
+    return subprocess.run([sys.executable, str(HOOK)],
+                          input=raw_stdin if raw_stdin is not None else json.dumps(payload),
+                          capture_output=True, text=True, timeout=30, env=env)
 
 
 def corpus_file(claude_dir, name):
     return Path(claude_dir) / "memory" / name
 
 
-# ---------------------------------------------------------------------------
+def project_memory_file(claude_dir, name, slug="-home-user-repo"):
+    return Path(claude_dir) / "projects" / slug / "memory" / name
+
+
+# ---- legacy machine-wide corpus ----
+
 def test_marker_write_into_corpus_is_blocked(tmp_path):
     write_privacy(tmp_path, ["ACME-*"])
-    r = run_hook(tmp_path, corpus_file(tmp_path, "leak.md"),
-                 "notes mentioning ACME-1234 internally")
+    r = run_hook(tmp_path, corpus_file(tmp_path, "leak.md"), "notes mentioning ACME-1234 internally")
     assert r.returncode == 2
     assert "MEMORY PRIVACY GUARD" in r.stderr
 
 
-def test_marker_write_outside_corpus_is_allowed(tmp_path):
+def test_marker_write_outside_any_corpus_is_allowed(tmp_path):
     write_privacy(tmp_path, ["ACME-*"])
-    # a project-scoped memory is NOT the global corpus — not the guard's concern
-    outside = Path(tmp_path) / "projects" / "repoA" / "memory" / "leak.md"
-    r = run_hook(tmp_path, outside, "notes mentioning ACME-1234 internally")
-    assert r.returncode == 0
+    outside = Path(tmp_path) / "projects" / "repoA" / "notes" / "leak.md"
+    assert run_hook(tmp_path, outside, "notes mentioning ACME-1234 internally").returncode == 0
+    assert run_hook(tmp_path, tmp_path / "src" / "x.py", "ACME-1234").returncode == 0
 
 
 def test_clean_write_into_corpus_is_allowed(tmp_path):
     write_privacy(tmp_path, ["ACME-*"])
-    r = run_hook(tmp_path, corpus_file(tmp_path, "note.md"),
-                 "a perfectly clean cross-project lesson")
+    assert run_hook(tmp_path, corpus_file(tmp_path, "note.md"), "a clean cross-project lesson").returncode == 0
+
+
+# ---- the native auto-memory tree (where MEMORY.md actually lives) ----
+
+def test_native_project_memory_is_guarded(tmp_path):
+    write_privacy(tmp_path, ["ACME-*"])
+    r = run_hook(tmp_path, project_memory_file(tmp_path, "MEMORY.md"), "root cause: ACME-1234 rollout")
+    assert r.returncode == 2
+    assert "project memory corpus" in r.stderr
+    assert run_hook(tmp_path, project_memory_file(tmp_path, "topic.md"), "clean lesson").returncode == 0
+
+
+def test_remote_memory_dir_env_is_honored(tmp_path):
+    write_privacy(tmp_path, ["ACME-*"])
+    remote = tmp_path / "remote-mem"
+    target = remote / "projects" / "-home-user-repo" / "memory" / "MEMORY.md"
+    r = run_hook(tmp_path, target, "ACME-1234", env_extra={"CLAUDE_CODE_REMOTE_MEMORY_DIR": str(remote)})
+    assert r.returncode == 2
+
+
+def test_relative_memory_path_is_resolved_against_cwd(tmp_path):
+    write_privacy(tmp_path, ["ACME-*"])
+    slug_dir = tmp_path / "projects" / "-home-user-repo"
+    (slug_dir / "memory").mkdir(parents=True)
+    r = run_hook(tmp_path, "memory/MEMORY.md", "ACME-1234", cwd=slug_dir)
+    assert r.returncode == 2
+
+
+# ---- pattern sources ----
+
+def test_shipped_defaults_catch_secrets_without_any_operator_file(tmp_path):
+    # No <config>/memory/privacy.toml at all: the plugin's doctrine/privacy.toml arms the guard.
+    for secret in ("-----BEGIN RSA PRIVATE KEY-----\nMIIE...", "token ghp_abcdef123456",
+                   "key sk-ant-api03-xyz", "aws AKIAIOSFODNN7EXAMPLE"):
+        r = run_hook(tmp_path, project_memory_file(tmp_path, "MEMORY.md"), secret,
+                     env_extra={"CLAUDE_PLUGIN_ROOT": str(ROOT)})
+        assert r.returncode == 2, secret
+    r = run_hook(tmp_path, project_memory_file(tmp_path, "MEMORY.md"),
+                 "the build takes 4 minutes on this box", env_extra={"CLAUDE_PLUGIN_ROOT": str(ROOT)})
     assert r.returncode == 0
 
 
-def test_no_privacy_toml_fails_open(tmp_path):
-    # no privacy.toml at all: can't honestly block => allow, even with a marker
+def test_operator_file_wins_over_shipped_defaults(tmp_path):
+    write_privacy(tmp_path, ["ACME-*"])
+    r = run_hook(tmp_path, corpus_file(tmp_path, "leak.md"), "token ghp_abcdef",
+                 env_extra={"CLAUDE_PLUGIN_ROOT": str(ROOT)})
+    assert r.returncode == 0   # the operator's list (no ghp_) is the one in force
+
+
+def test_no_patterns_anywhere_fails_open_and_records_inertness(tmp_path):
     (Path(tmp_path) / "memory").mkdir(parents=True, exist_ok=True)
-    r = run_hook(tmp_path, corpus_file(tmp_path, "leak.md"),
-                 "notes mentioning ACME-1234 internally")
+    r = run_hook(tmp_path, corpus_file(tmp_path, "leak.md"), "notes mentioning ACME-1234 internally")
     assert r.returncode == 0
+    recs = [json.loads(ln) for ln in (tmp_path / "st" / "ledger-p1.jsonl").read_text().splitlines()]
+    assert any(x["hook"] == "mem-privacy" and x["outcome"] == "inert-no-patterns" for x in recs)
 
 
 def test_empty_patterns_fails_open(tmp_path):
     write_privacy(tmp_path, [])
-    r = run_hook(tmp_path, corpus_file(tmp_path, "leak.md"),
-                 "notes mentioning ACME-1234 internally")
+    assert run_hook(tmp_path, corpus_file(tmp_path, "leak.md"), "ACME-1234").returncode == 0
+
+
+def test_minimal_parser_works_without_tomllib(monkeypatch):
+    spec = importlib.util.spec_from_file_location("mem_guard", HOOK)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    monkeypatch.setitem(sys.modules, "tomllib", None)   # `import tomllib` raises ImportError
+    raw = '# comment\npatterns = [\n  "ACME-*",  # ticket ids\n  \'host.corp\',\n  # "disabled",\n]\n'
+    assert mod._parse_patterns(raw) == ["ACME-*", "host.corp"]
+    assert mod._parse_patterns("nothing here") == []
+
+
+# ---- tool shapes ----
+
+def test_edit_new_string_and_batch_edits_are_scanned(tmp_path):
+    write_privacy(tmp_path, ["ACME-*"])
+    target = str(corpus_file(tmp_path, "note.md"))
+    r = run_hook(tmp_path, tool="Edit", tool_input={"file_path": target, "old_string": "a",
+                                                      "new_string": "see ACME-99"})
+    assert r.returncode == 2
+    r = run_hook(tmp_path, tool="Edit", tool_input={"file_path": target,
+                                                      "edits": [{"old_string": "a", "new_string": "ACME-7"}]})
+    assert r.returncode == 2
+    r = run_hook(tmp_path, tool="Edit", tool_input={"file_path": target, "old_string": "a", "new_string": "clean"})
     assert r.returncode == 0
+
+
+def test_other_tools_are_not_this_guards_business(tmp_path):
+    write_privacy(tmp_path, ["ACME-*"])
+    assert run_hook(tmp_path, corpus_file(tmp_path, "leak.md"), "ACME-1234", tool="Bash").returncode == 0
 
 
 def test_path_traversal_out_of_corpus_is_not_blocked(tmp_path):
-    # $BASE/memory/../elsewhere resolves OUT of the corpus via realpath, so it is
-    # out of blocked scope (documented: the guard scopes by resolved real path).
     write_privacy(tmp_path, ["ACME-*"])
     traversal = corpus_file(tmp_path, "../elsewhere/leak.md")
-    r = run_hook(tmp_path, traversal, "notes mentioning ACME-1234 internally")
-    assert r.returncode == 0
+    assert run_hook(tmp_path, traversal, "notes mentioning ACME-1234 internally").returncode == 0
 
 
 def test_case_insensitive_fs_variant_path_is_blocked(tmp_path):
-    # On a case-insensitive fs (macOS APFS/HFS+), $BASE/Memory/ IS $BASE/memory/, so a
-    # capitalized target must not slip a marker past the guard. Forced via the env seam
-    # since the CI fs is case-sensitive.
-    write_privacy(tmp_path, ["ACME-*"])
-    variant = Path(tmp_path) / "Memory" / "leak.md"     # capital M
-    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), HARDMODE_MEM_FS_CASE_INSENSITIVE="1")
-    payload = {"tool_name": "Write",
-               "tool_input": {"file_path": str(variant), "content": "secret ACME-1234"}}
-    r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
-                       capture_output=True, text=True, timeout=30, env=env)
-    assert r.returncode == 2
-    assert "MEMORY PRIVACY GUARD" in r.stderr
-
-
-@pytest.mark.skipif(os.name == "nt", reason=(
-    "a genuinely distinct Memory/ sibling cannot be constructed on NTFS: realpath "
-    "case-folds Memory/ -> memory/ before the guard compares, and blocking IS "
-    "correct there — the env override models the fs, it cannot overrule it"))
-def test_case_sensitive_fs_variant_path_is_allowed(tmp_path):
-    # With case-sensitivity forced off, $BASE/Memory/ is a genuinely distinct dir and
-    # must NOT be blocked (no false-block of a real sibling on Linux).
     write_privacy(tmp_path, ["ACME-*"])
     variant = Path(tmp_path) / "Memory" / "leak.md"
-    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), HARDMODE_MEM_FS_CASE_INSENSITIVE="0")
-    payload = {"tool_name": "Write",
-               "tool_input": {"file_path": str(variant), "content": "secret ACME-1234"}}
-    r = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
-                       capture_output=True, text=True, timeout=30, env=env)
+    r = run_hook(tmp_path, variant, "secret ACME-1234", env_extra={"HARDMODE_MEM_FS_CASE_INSENSITIVE": "1"})
+    assert r.returncode == 2
+
+
+@pytest.mark.skipif(os.name == "nt", reason="NTFS case-folds before the guard compares")
+def test_case_sensitive_fs_variant_path_is_allowed(tmp_path):
+    write_privacy(tmp_path, ["ACME-*"])
+    variant = Path(tmp_path) / "Memory" / "leak.md"
+    r = run_hook(tmp_path, variant, "secret ACME-1234", env_extra={"HARDMODE_MEM_FS_CASE_INSENSITIVE": "0"})
     assert r.returncode == 0
 
 
 def test_malformed_stdin_fails_open(tmp_path):
     write_privacy(tmp_path, ["ACME-*"])
-    r = run_hook(tmp_path, raw_stdin="not json")
-    assert r.returncode == 0
+    assert run_hook(tmp_path, raw_stdin="not json").returncode == 0
 
 
 def test_non_ascii_content_still_blocks_under_ascii_locale(tmp_path):
-    # With the child's stdio forced to ASCII, a marker inside UTF-8 content must still be
-    # decoded and BLOCKED. Old cp1252/ascii defaults would UnicodeError on the multi-byte
-    # content, the guard would fail OPEN (exit 0) — silently ALLOWING the leak it exists
-    # to stop. The hook reconfigures stdin/stderr to utf-8 before reading.
     write_privacy(tmp_path, ["ACME-*"])
     payload = {"tool_name": "Write", "tool_input": {
         "file_path": str(corpus_file(tmp_path, "leak.md")),
         "content": "café notes — ACME-1234 leak — localización 日本語"}}
-    env = dict(os.environ, CLAUDE_DIR=str(tmp_path), PYTHONIOENCODING="ascii")
-    r = subprocess.run(
-        [sys.executable, str(HOOK)],
-        # ensure_ascii=False so raw UTF-8 bytes hit the wire (the default escapes them to
-        # \uXXXX, which is pure ASCII and would not exercise the decode path at all).
-        input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-        capture_output=True, timeout=30, env=env,
-    )
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(tmp_path), PYTHONIOENCODING="ascii")
+    r = subprocess.run([sys.executable, str(HOOK)],
+                       input=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+                       capture_output=True, timeout=30, env=env)
     assert r.returncode == 2, r.stderr
 
 
-def test_base_honors_claude_dir(tmp_path):
-    # privacy.toml + the blocking decision are read from CLAUDE_DIR. The SAME
-    # payload blocks under a base that has the config, and is allowed under a base
-    # that does not (target no longer under that base's corpus / no patterns).
-    base_a = tmp_path / "a"
-    base_b = tmp_path / "b"
+def test_base_honors_claude_config_dir_not_claude_dir(tmp_path):
+    # CLAUDE_CONFIG_DIR is the real harness variable; CLAUDE_DIR never existed.
+    base_a, base_b = tmp_path / "a", tmp_path / "b"
     write_privacy(base_a, ["ACME-*"])
     (base_b / "memory").mkdir(parents=True, exist_ok=True)
     target = corpus_file(base_a, "leak.md")
-
-    blocked = run_hook(base_a, target, "mentions ACME-1234")
-    assert blocked.returncode == 2
-
-    allowed = run_hook(base_b, target, "mentions ACME-1234")
-    assert allowed.returncode == 0  # target not under base_b's corpus => allowed
+    assert run_hook(base_a, target, "mentions ACME-1234").returncode == 2
+    assert run_hook(base_b, target, "mentions ACME-1234").returncode == 0
+    # a stale CLAUDE_DIR must not override a set CLAUDE_CONFIG_DIR
+    r = run_hook(base_a, target, "mentions ACME-1234", env_extra={"CLAUDE_DIR": str(base_b)})
+    assert r.returncode == 2

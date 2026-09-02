@@ -1,12 +1,14 @@
 {
   "name": "hardmode",
   "owner": { "name": "crocco" },
-  "description": "hardmode — a deterministic discipline floor for Claude Code",
+  "metadata": {
+    "description": "hardmode — a deterministic discipline floor for Claude Code"
+  },
   "plugins": [
     {
       "name": "hardmode",
       "source": "./",
-      "description": "Claim-audit gate, destructive-command guard, loop alarm, compaction recovery and memory privacy guard; independent-verification agents (verifier, plan-critic, oracle); the staged /hardmode protocol and refute-by-default review workflows.",
+      "description": "Evidence-based claim-audit gate, destructive-command guard, read-only verification agents with output contracts, loop alarm, commit preflight, compaction recovery, memory privacy guard, workflow pre-flight lint, firing ledger; independent-verification agents (verifier, plan-critic, oracle, scout); the staged /hardmode protocol, refute-by-default review workflows, doctor/stats/selftest commands.",
       "author": { "name": "crocco" },
       "license": "MIT",
       "keywords": ["discipline", "hooks", "verification", "claude-code"]
