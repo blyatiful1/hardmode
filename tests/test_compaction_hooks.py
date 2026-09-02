@@ -38,14 +38,19 @@ def saved(state_dir, session="s1"):
     return Path(state_dir) / f"original-task-{session}.txt"
 
 
+HERMETIC_GIT = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                    GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@x",
+                    GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@x")
+
+
 def git_repo(path, dirty_name="dirty.txt"):
     path.mkdir()
-    subprocess.run(["git", "init", "-q", "-b", "main"], cwd=path, check=True)
-    subprocess.run(["git", "config", "user.email", "t@x"], cwd=path, check=True)
-    subprocess.run(["git", "config", "user.name", "t"], cwd=path, check=True)
+    g = lambda *a: subprocess.run(["git", "-c", "commit.gpgsign=false", *a], cwd=path, check=True,  # noqa: E731
+                                  capture_output=True, env=HERMETIC_GIT)
+    g("init", "-q", "-b", "main")
     (path / "a.txt").write_text("a")
-    subprocess.run(["git", "add", "-A"], cwd=path, check=True)
-    subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=path, check=True, capture_output=True)
+    g("add", "-A")
+    g("commit", "-q", "-m", "init")
     if dirty_name:
         (path / dirty_name).write_text("x")
     return path
@@ -209,3 +214,22 @@ def test_non_ascii_request_survives_the_save_recover_round_trip(tmp_path):
     assert r2.returncode == 0
     out = r2.stdout.decode("utf-8", errors="replace")
     assert "CONTEXT JUST COMPACTED" in out and msg in out
+
+
+def test_original_task_is_write_once_and_later_turns_are_rewritten(tmp_path):
+    t1 = transcript(tmp_path, [user_entry("First real task"), user_entry("scope change: also X"), user_entry("and rename Y")])
+    run(SAVE, {"session_id": "w1", "transcript_path": str(t1)}, tmp_path)
+    assert saved(tmp_path, "w1").read_text() == "First real task"
+    turns = tmp_path / "compact-turns-w1.txt"
+    assert "scope change: also X" in turns.read_text() and "and rename Y" in turns.read_text()
+    # second compaction: the transcript now starts with a compact summary and has fewer
+    # later turns — the original task must survive and the stale turn list must go
+    t2 = transcript(tmp_path, [user_entry("summary of everything", compact_summary=True),
+                               user_entry("A different-looking first message"), user_entry("scope change: also X")])
+    run(SAVE, {"session_id": "w1", "transcript_path": str(t2)}, tmp_path)
+    assert saved(tmp_path, "w1").read_text() == "First real task"
+    assert "and rename Y" not in turns.read_text()
+    t3 = transcript(tmp_path, [user_entry("Only one message")])
+    run(SAVE, {"session_id": "w1", "transcript_path": str(t3)}, tmp_path)
+    assert saved(tmp_path, "w1").read_text() == "First real task"
+    assert not turns.exists() or "scope change" not in turns.read_text()

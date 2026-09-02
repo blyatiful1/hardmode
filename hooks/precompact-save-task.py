@@ -106,12 +106,23 @@ def main():
     session = session_slug(data)
     d = state_dir()
     turns = user_turns(data.get("transcript_path", ""))
+    task_path = os.path.join(d, f"original-task-{session}.txt")
+    turns_path = os.path.join(d, f"compact-turns-{session}.txt")
     if turns:
-        first = turns[0]
-        if len(first) > MAX_CHARS:
-            first = first[:MAX_CHARS] + "\n[... truncated — full text in transcript]"
-        write_atomic(os.path.join(d, f"original-task-{session}.txt"), first)
-        later = turns[1:]
+        # Write-once: after a compaction the transcript starts with the summary, so the
+        # first visible user turn is a LATER one — it must never overwrite the original.
+        if not os.path.exists(task_path):
+            first = turns[0]
+            if len(first) > MAX_CHARS:
+                first = first[:MAX_CHARS] + "\n[... truncated — full text in transcript]"
+            write_atomic(task_path, first)
+            later = turns[1:]
+        else:
+            later = turns          # everything visible now came after the original
+        try:
+            os.unlink(turns_path)  # never re-inject a stale list from an earlier compaction
+        except OSError:
+            pass
         if later:
             kept = later[-MAX_LATER_TURNS:]
             omitted = len(later) - len(kept)
@@ -121,7 +132,7 @@ def main():
             for i, t in enumerate(kept, start=len(later) - len(kept) + 2):
                 body = t if len(t) <= MAX_LATER_CHARS else t[:MAX_LATER_CHARS] + " [...]"
                 parts.append(f"--- user turn {i}/{len(turns)} ---\n{body}")
-            write_atomic(os.path.join(d, f"compact-turns-{session}.txt"), "\n".join(parts))
+            write_atomic(turns_path, "\n".join(parts))
     snap = git_snapshot(data.get("cwd"), data.get("trigger") or "unknown")
     if snap:
         write_atomic(os.path.join(d, f"compact-snapshot-{session}.txt"), snap)

@@ -9,7 +9,8 @@ DOCS = sorted(set([ROOT / "README.md", ROOT / "CHANGELOG.md", ROOT / "doctrine" 
                    *(ROOT / "docs").glob("*.md"), *(ROOT / "bench").glob("*.md"),
                    *(ROOT / "skills").glob("*/SKILL.md"), *(ROOT / "agents").glob("*.md"),
                    *(ROOT / "commands").glob("*.md")]))
-SOURCES = sorted([*(ROOT / "hooks").glob("*.py"), *(ROOT / "tools").glob("*.py"), *(ROOT / "tools").glob("*.mjs")])
+SOURCES = sorted([*(ROOT / "hooks").glob("*.py"), *(ROOT / "tools").glob("*.py"), *(ROOT / "tools").glob("*.mjs"),
+                  *(ROOT / "bench").glob("*.py"), *(ROOT / "workflows").glob("*.js")])
 LINK = re.compile(r"\[[^\]]*\]\(([^)\s]+)\)")
 # A bare repo-relative path in prose or a docstring: docs/x.md, hooks/x.py, tools/x, bench/x
 # (tests/ is excluded: docs and docstrings use illustrative test paths such as tests/test_x.py)

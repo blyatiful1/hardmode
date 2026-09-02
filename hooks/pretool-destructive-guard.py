@@ -48,7 +48,7 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _hardmode import blank_quotes, ledger, reconfigure_utf8  # noqa: E402
+from _hardmode import blank_quotes, ledger, normalize_cmd, reconfigure_utf8  # noqa: E402
 
 OVERRIDE = "HARDMODE_DESTRUCTIVE_OK=1"
 GIT_TIMEOUT = 3          # per call
@@ -110,7 +110,7 @@ def _blank_comments(flat):
     return "".join(out)
 
 
-_HEREDOC_START = re.compile(r"<<-?\s*(['\"])([A-Za-z_]\w*)\1")
+_HEREDOC_START = re.compile(r"<<-?\s*(?:(['\"])([A-Za-z_]\w*)\1|([A-Za-z_]\w*))")
 _SHELL_WORD = r"(?:/\S*/)?(?:bash|sh|zsh|dash|ksh)"
 _HEREDOC_TO_SHELL_BEFORE = re.compile(
     r"(?:^|[;|&\n]\s*)(?:[A-Za-z_]\w*=\S*\s+)*(?:(?:sudo|doas|env|command|exec|nohup|nice)\s+)*"
@@ -123,19 +123,23 @@ def _quoted_spans(s):
 
 
 def _blank_quoted_heredocs(flat):
-    """Length- and newline-preserving blanking of QUOTED-delimiter heredoc bodies
-    (<<'EOF' ... EOF): literal data, no expansions — so a doc that CONTAINS `rm -rf /`
-    does not trip the guard. Two exceptions keep the guard honest: a heredoc that is
-    the stdin of a shell (`bash <<'EOF'`, `cat <<'EOF' | sh`) is executed line by
-    line, so its body stays visible; and a heredoc marker that sits INSIDE a quoted
-    string is a mention, not a heredoc, so it cannot blank the rest of the command.
-    Unquoted-delimiter heredocs stay visible ($(...) executes inside them)."""
+    """Length- and newline-preserving blanking of heredoc BODIES. A quoted-delimiter
+    heredoc (<<'EOF') is pure literal data; an unquoted one (<<EOF) is prose too, except
+    that `$(...)`/backtick substitutions execute inside it — so its body is blanked
+    EXCEPT for those substitution spans, which stay visible and are scanned as commands.
+    (Before this, a runbook written with `cat <<EOF` that merely mentioned `git reset
+    --hard` was blocked as if the command ran.) Exceptions that keep the guard honest:
+    a heredoc that is the stdin of a shell (`bash <<'EOF'`, `cat <<EOF | sh`) is executed
+    line by line, so its body stays fully visible; and a heredoc marker that sits INSIDE
+    a quoted string is a mention, not a heredoc, so it cannot blank the rest."""
     out = flat
     qb = blank_quotes(flat)
     spans = _quoted_spans(flat)
     for m in list(_HEREDOC_START.finditer(flat)):
         if any(a < m.start() < b for a, b in spans):
-            continue  # `<<'EOF'` mentioned inside a string
+            continue
+        quoted = m.group(1) is not None
+        delim = m.group(2) if quoted else m.group(3)
         line_start = flat.rfind("\n", 0, m.start()) + 1
         line_end = out.find("\n", m.end())
         if line_end == -1:
@@ -143,12 +147,18 @@ def _blank_quoted_heredocs(flat):
         before = qb[line_start:m.start()]
         after = qb[m.end():line_end]
         if _HEREDOC_TO_SHELL_BEFORE.search(before) or _HEREDOC_TO_SHELL_AFTER.search(after):
-            continue  # the body IS the script a shell runs — keep it scannable
-        delim = m.group(2)
+            continue
         t = re.compile(r"\n[ \t]*" + re.escape(delim) + r"[ \t]*(?=\n|$)").search(out, line_end)
         end = t.start() if t else len(out)
         body = out[line_end + 1:end]
-        out = out[:line_end + 1] + re.sub(r"[^\n]", " ", body) + out[end:]
+        blanked = re.sub(r"[^\n]", " ", body)
+        if not quoted:
+            # keep the substitutions (the only executable thing in an unquoted body)
+            pieces = list(blanked)
+            for sm in _SUBST.finditer(body):
+                pieces[sm.start():sm.end()] = body[sm.start():sm.end()]
+            blanked = "".join(pieces)
+        out = out[:line_end + 1] + blanked + out[end:]
     return out
 
 
@@ -174,7 +184,7 @@ TREE_DESTROYERS = [
     (re.compile(_G + r"\bswitch\b[^|;&]*(?:" + _FORCE_FLAG + r"|\s--discard-changes\b)"),
      "git switch -f/--force/--discard-changes overwrites uncommitted local modifications", "switch"),
 ]
-CHECKOUT_PATHS = re.compile(_G + r"\bcheckout\b[^|;&]*?\s--\s+([^|;&]+)")
+CHECKOUT_PATHS = re.compile(_G + r"\bcheckout\b[^|;&]*?\s--\s([^|;&]+)")   # one \s: a quoted path is blank in this view
 RESTORE = re.compile(_G + r"\brestore\b([^|;&]*)")
 ALWAYS_DANGEROUS = [
     (re.compile(_G + r"\bstash\s+(?:drop|clear)\b"),
@@ -193,7 +203,7 @@ ALWAYS_DANGEROUS = [
      "shred overwrites file contents by design — unrecoverable", "shred"),
 ]
 FORCE_PUSH = re.compile(_G + r"\bpush\b[^|;&]*(?:--force\b|\s-[a-zA-Z]*f[a-zA-Z]*\b|\s\+[A-Za-z0-9_./:~^-])")
-FORCE_WITH_LEASE = re.compile(r"--force-with-lease(?:=\S*)?")
+FORCE_WITH_LEASE = re.compile(r"--force-with-lease(?:=\S*)?|--force-if-includes\b")
 PUSH_DRY_RUN = re.compile(r"\s(?:--dry-run|-n)\b")
 BRANCH_DELETE = re.compile(_G + r"\bbranch\b([^|;&]*(?:\s-D\b|\s--delete\s+--force\b|\s--force\s+--delete\b|\s-[a-zA-Z]*[dD][a-zA-Z]*\b[^|;&]*\s--force\b)[^|;&]*)")
 
@@ -208,7 +218,7 @@ _BASH_RECURSIVE = re.compile(r"-[a-zA-Z]*[rR][a-zA-Z]*|--recursive")
 _SEP_STAR = r"(?:/\*?)?"
 _RM_CATASTROPHIC = re.compile(
     r"(?:/\*?|~" + _SEP_STAR + r"|\$\{?HOME\}?" + _SEP_STAR + r"|\.\.?" + _SEP_STAR + r"|\*)$")
-_VAR_ASSIGN = re.compile(r"(?:^|[\s;&|])([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*'|\S*)")
+_VAR_ASSIGN = re.compile(r"(?:^|[\s;&|])([A-Za-z_]\w*)=(\"[^\"]*\"|'[^']*'|[^\s;&|]*)")
 
 
 def _abs_catastrophic(t, cwd=None):
@@ -248,6 +258,8 @@ def _expand(token, env, cwd, git):
     t = token
     for name, val in env.items():
         t = t.replace("${%s}" % name, val).replace("$" + name, val)
+    if _HOME:
+        t = t.replace("${HOME}", _HOME).replace("$HOME", _HOME)
     if cwd:
         t = t.replace("${PWD}", cwd).replace("$PWD", cwd).replace("$(pwd)", cwd)
     if "$(git rev-parse --show-toplevel)" in t:
@@ -312,6 +324,40 @@ def _find_root_catastrophic(t):
     """`find .` is the everyday idiom, so unlike rm the relative forms (., .., *) are
     not catastrophic starts — only /, ~, $HOME and whole system dirs are."""
     return bool(_FIND_ROOT.fullmatch(t)) or _abs_catastrophic(t)
+
+
+_PIPE_SPLIT = re.compile(r"(?<!\\)\|")
+
+
+def _producer_targets(flat):
+    """For every `... | xargs rm -r...` (or `| xargs -0 rm -rf`) stage whose rm carries no
+    literal target, the targets come from the PRODUCER: a `find <starts>` (its start
+    dirs), an `echo`/`printf` (its arguments), anything else -> unknown. Returned as
+    (targets, known) pairs judged against catastrophic ROOTS only — a piped rm cannot
+    be judged for uncommitted work, that needs literal paths."""
+    out = []
+    for chunk in re.split(r"(?<!\\)[;&\n]+", blank_quotes(flat)):
+        stages = _PIPE_SPLIT.split(chunk)
+        for i, st in enumerate(stages[1:], start=1):
+            rm = _rm_targets(st)
+            if not rm or rm[1]:
+                continue
+            prev = stages[i - 1].strip()
+            fm = re.match(r"^(?:[A-Za-z_]\w*=\S*\s+)*(?:sudo\s+)?(?:/\S*/)?find\s+(.*)", prev)
+            if not fm and not rm[0]:
+                continue           # a non-recursive rm is only catastrophic when find walks for it
+            if fm:
+                starts = []
+                for t in fm.group(1).split():
+                    if t.startswith("-") or t in ("(", "!", ")"):
+                        break
+                    starts.append(t)
+                out.append(starts or ["."])
+            elif re.match(r"^(?:[A-Za-z_]\w*=\S*\s+)*(?:echo|printf)\s+(.*)", prev):
+                out.append(re.match(r"^(?:[A-Za-z_]\w*=\S*\s+)*(?:echo|printf)\s+(.*)", prev).group(1).split())
+            else:
+                out.append(["."])
+    return out
 
 
 def _find_targets(rmseg):
@@ -405,6 +451,21 @@ class Git:
         return {ln.strip() for ln in out.splitlines() if ln.strip()} if ok else set()
 
 
+def _unmark(tokens):
+    return [t.replace(QUOTE_MARK, "") for t in tokens if t.replace(QUOTE_MARK, "")]
+
+
+def _args_from_view(pattern, useg, rmseg):
+    """Match `pattern` on the quote-blanked view to DETECT, then read the argument text
+    from the quote-preserving view at the same offsets — a quoted branch name or path
+    is an argument, not empty space."""
+    m = pattern.search(useg)
+    if not m:
+        return None
+    raw = rmseg[m.start(1):m.end(1)] if m.lastindex else ""
+    return _unmark(raw.split())
+
+
 def block(data, rule, reason):
     print(
         f"DESTRUCTIVE COMMAND GUARD (automated): blocked — {reason}. "
@@ -454,8 +515,9 @@ def main():
     if not isinstance(cmd, str) or not cmd.strip():
         return 0
     cwd = data.get("cwd")
-    cmd = re.sub(r"\\\r?\n", " ", cmd).replace("\r\n", "\n").replace("\r", "\n")
-    flat = re.sub(r"[^\S\n]+", " ", cmd).strip()
+    if not (isinstance(cwd, str) and os.path.isdir(cwd)):
+        cwd = os.getcwd()          # the harness runs hooks in the project dir
+    flat = normalize_cmd(cmd)
     flat = _blank_comments(flat)
     flat = _blank_quoted_heredocs(flat)
     env = _assignments(flat)
@@ -484,8 +546,10 @@ def main():
                     resolved = _resolve_dir(t, cwd)
                     base = os.path.basename(resolved.rstrip("/"))
                     probe = resolved if os.path.isdir(resolved) else os.path.dirname(resolved)
-                    if base == ".git" or resolved in (git.toplevel(cwd), git.git_dir(cwd),
-                                                      git.toplevel(probe), git.git_dir(probe)):
+                    real = os.path.realpath(resolved)
+                    repo_dirs = {os.path.realpath(x) for x in (git.toplevel(cwd), git.git_dir(cwd),
+                                                              git.toplevel(probe), git.git_dir(probe)) if x}
+                    if base == ".git" or real in repo_dirs:
                         return block(data, "rm-repo",
                                      f"rm -r of {t} deletes the repository itself (all history and every recovery path)")
                     rm_checks.append((t, resolved))
@@ -497,17 +561,21 @@ def main():
         if FORCE_PUSH.search(push_view) and not PUSH_DRY_RUN.search(useg):
             return block(data, "force-push",
                          "bare force-push can destroy remote history; use --force-with-lease, and only with user approval")
-        m = BRANCH_DELETE.search(useg)
-        if m:
-            branch_names.extend(t for t in m.group(1).split() if not t.startswith("-"))
+        if BRANCH_DELETE.search(useg):
+            names = [t for t in (_args_from_view(BRANCH_DELETE, useg, rmseg) or []) if not t.startswith("-")]
+            if not names or any("$" in n or "`" in n for n in names):
+                return block(data, "branch-D",
+                             "git branch -D with a branch name the guard cannot read (substitution/expansion) — "
+                             "spell the branch out so it can be checked for unmerged commits")
+            branch_names.extend(names)
         if tree is None:
             for pat, why, rule in TREE_DESTROYERS:
                 if pat.search(useg):
                     paths = None
                     if rule == "checkout":
-                        pm = CHECKOUT_PATHS.search(useg)
+                        pm = _args_from_view(CHECKOUT_PATHS, useg, rmseg)
                         if pm:
-                            paths = [p for p in pm.group(1).split() if not p.startswith("-")] or None
+                            paths = [p for p in pm if not p.startswith("-")] or None
                     tree = (why, rule, paths)
                     break
         if tree is None:
@@ -517,10 +585,14 @@ def main():
                 staged_only = ("--staged" in args or re.search(r"\s-S\b", args)) and not (
                     "--worktree" in args or re.search(r"\s-W\b", args))
                 if not staged_only:
-                    paths = [p for p in args.split() if not p.startswith("-")] or None
+                    paths = [p for p in (_args_from_view(RESTORE, useg, rmseg) or []) if not p.startswith("-")] or None
                     tree = ("git restore discards uncommitted modifications to the given paths",
                             "restore", paths)
 
+    for targets in _producer_targets(flat):
+        if any(_find_root_catastrophic(_expand(t, env, cwd, git)) for t in targets):
+            return block(data, "xargs-rm",
+                         "a recursive rm fed by find/xargs from /, ~, $HOME or a system dir is unrecoverable")
     dirs = _candidate_dirs(flat, cwd)
     if tree:
         why, rule, paths = tree
@@ -546,7 +618,7 @@ def main():
                 return block(data, "branch-D",
                              f"git branch -D {hit[0]} would delete commits reachable from no other ref")
     if overridden:
-        ledger(data, "destructive-guard", "override", overridden[0][:80])
+        ledger(data, "destructive-guard", "override", f"segments={len(overridden)}")
     return 0
 
 

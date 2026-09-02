@@ -26,7 +26,7 @@ The honest delta against stock Claude Code 2.1.x. Most of the original kit is no
 | Orchestration script API | `workflow-authoring` skill, Workflow tool | *when* to orchestrate, model-pin policy, the golden patterns, a pre-flight lint that rejects a broken script before it spends money |
 | Diff review | `/code-review` (incl. `ultra`), `/simplify`, `/security-review` | named coverage dimensions + refute-by-default verdicts (`/hardmode:paranoid-review`) |
 | Planning | plan mode, `Plan` agent | the adversarial critique itself (`plan-critic`), judge-panel planning (`/hardmode:deep-plan`), implement-in-verified-increments (`/hardmode:increment`) |
-| Verification agents | `/verify` skill (drives a change end-to-end) | fresh-context `verifier` / `plan-critic` / `oracle` / `scout` that are **read-only by hook enforcement** and must answer in a **machine-checked contract** |
+| Verification agents | `/verify` skill (drives a change end-to-end) | fresh-context `verifier` / `plan-critic` / `oracle` / `scout` that are **read-only by hook enforcement**; the first three must answer in a **machine-checked contract** |
 | Memory | auto-memory (corpus) | the postmortem quality bar, `memcheck` for the mechanical steps, and a privacy guard on writes armed with secret-shaped defaults |
 | Effort | `/effort ultracode` | — |
 | **Claim auditing** | **nothing** | Stop-hook gate that reads the transcript's **evidence**: which check ran after the last edit, and whether it passed — including edits made by subagents |
@@ -106,7 +106,7 @@ SCENARIO 7  a verifier answers in prose instead of its contract
 
 SCENARIO 8  committing before the check has gone green
   bash:   git commit -am wip   (3 edits this session, no check has passed)
-  kit:    NUDGED (non-blocking context) -> "PREFLIGHT (automated): you are about to `git commit` but no recognised ..."
+  kit:    NUDGED (non-blocking context) -> "PREFLIGHT (automated): you are about to `git commit` but 3 modificatio ..."
   [ok]
 
 SCENARIO 9  the wiring itself: hooks.json against this harness's events
@@ -157,7 +157,7 @@ Three things worth knowing:
   - `precompact-save-task` (PreCompact) + `sessionstart-compact-recovery` (SessionStart compact) — request, later turns, git snapshot; recovery warns when HEAD moved.
   - `pretool-mem-privacy-guard` (PreToolUse Write|Edit) — the native auto-memory tree and the legacy corpus, `CLAUDE_CONFIG_DIR`-aware, shipped defaults.
   - `sessionstart-floor-check` (SessionStart startup|resume|clear) + `sessionend-ledger-summary` (SessionEnd) — the witness, the self-test, the rollup.
-- **4 agents** (`agents/`): `verifier`, `plan-critic`, `oracle`, `scout` — pinned to a model independent of the driver, read-only by enforcement.
+- **4 agents** (`agents/`): `verifier`, `plan-critic`, `oracle` (structured verdicts, contract-checked), `scout` (free-form exploration) — pinned to a model independent of the driver, read-only by enforcement.
 - **5 workflows** (`workflows/`): `/hardmode:paranoid-review`, `/hardmode:verify-claim`, `/hardmode:deep-plan`, `/hardmode:bug-hunt`, `/hardmode:increment`.
 - **3 commands** (`commands/`): `/hardmode:doctor`, `/hardmode:stats`, `/hardmode:selftest`.
 - **3 skills** (`skills/`): `hardmode` (the staged protocol), `orchestrate` (fan-out etiquette + patterns), `postmortem` (what's worth banking, with `tools/memcheck.py`).

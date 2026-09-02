@@ -67,9 +67,9 @@ const seen = new Set()
 const dedupKey = f => `${f.file}:${f.line ?? (f.detail || '').toLowerCase().slice(0, 40)}:${(f.title || '').toLowerCase().slice(0, 50)}`
 
 // Coverage honesty: every dimension starts UNREVIEWED and is removed only when its
-// finder actually returned. This survives every way a stage can die — a resolved
-// null AND a throw (the budget ceiling throws inside stage 1, which would skip
-// stage 2 entirely and lose the bookkeeping).
+// finder actually returned. pipeline() skips the remaining stages whenever a stage
+// resolves to null OR throws, so the bookkeeping lives in stage 1 itself — stage 2
+// never sees a dead finder.
 const unauditedDimensions = DIMENSIONS.map(([key]) => key)
 const reviewed = key => { const i = unauditedDimensions.indexOf(key); if (i !== -1) unauditedDimensions.splice(i, 1) }
 
@@ -82,10 +82,12 @@ Dimension: ${key} — ${focus}.
 Read the diff yourself with git, then read enough surrounding code to judge in context.
 Report EVERY real issue you find regardless of severity — a separate verification step filters findings, you do not. Do not report style preferences.`,
     { label: `find:${key}`, phase: 'Find', schema: FINDINGS, model: 'opus', agentType: SCOUT }
-  ).catch(() => null),
+  ).then(
+    r => { if (r == null) { log(`find:${key}: FINDER DIED — this dimension is UNREVIEWED`); return null } reviewed(key); return r },
+    e => { log(`find:${key}: FINDER THREW (${e?.message ?? e}) — this dimension is UNREVIEWED`); return null }
+  ),
   (r, [key]) => {
-    if (r == null) { log(`find:${key}: FINDER DIED — this dimension is UNREVIEWED`); return [] }
-    reviewed(key)
+    if (r == null) return []
     if (budget.total && budget.remaining() < 30_000) {
       log(`find:${key}: token budget nearly spent — findings reported UNVERIFIED`)
       return (r.findings ?? []).filter(f => !seen.has(dedupKey(f)) && seen.add(dedupKey(f)))

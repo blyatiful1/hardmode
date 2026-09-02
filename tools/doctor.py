@@ -114,7 +114,10 @@ def check_cli(r):
 
 def check_registration(r, root):
     cfg = config_dir()
-    src_version = plugin_version(root)
+    # The checkout's version is the one THIS file ships with (module-relative ROOT);
+    # `root` may be the installed snapshot when run as /hardmode:doctor.
+    src_version = plugin_version(ROOT)
+    from_snapshot = os.path.realpath(root) != os.path.realpath(ROOT)
     found = []
     installed = read_json(os.path.join(cfg, "plugins", "installed_plugins.json")) or {}
     for key, entries in (installed.get("plugins") or {}).items():
@@ -128,7 +131,11 @@ def check_registration(r, root):
     if found:
         for key, ver, path, scope in found:
             note = f"{key} v{ver} ({scope}) at {path}"
-            if ver != src_version:
+            installed_here = os.path.realpath(path) == os.path.realpath(ROOT) if isinstance(path, str) else False
+            if installed_here:
+                r.ok("plugin", note + " — running from the installed snapshot; drift against your clone is not "
+                                "checkable from here (run `python3 tools/doctor.py` inside the clone)")
+            elif ver != src_version:
                 r.warn("plugin", f"{note} — this checkout is v{src_version}: run `claude plugin update hardmode` (the install is a pinned snapshot, not a live link)")
             else:
                 r.ok("plugin", note)
@@ -140,8 +147,8 @@ def check_registration(r, root):
             r.ok("plugin-enabled", ", ".join(enabled))
     elif synced:
         r.ok("plugin", f"synced install: {synced[0]} (managed by the remote/cowork host)")
-    elif os.environ.get("CLAUDE_PLUGIN_ROOT"):
-        r.ok("plugin", f"running under CLAUDE_PLUGIN_ROOT={os.environ['CLAUDE_PLUGIN_ROOT']}")
+    elif os.environ.get("CLAUDE_PLUGIN_ROOT") or from_snapshot:
+        r.ok("plugin", f"running under plugin root {root}")
     else:
         r.warn("plugin", f"hardmode is not registered under {cfg}/plugins — install with "
                          "`claude plugin marketplace add <checkout> && claude plugin install hardmode@hardmode` "
@@ -192,9 +199,17 @@ def check_settings(r):
         r.fail("kill-switch", "settings.json disableAllHooks=true — EVERY hook is off; the floor is inert")
     if (s.get("permissions") or {}).get("allowManagedHooksOnly") or s.get("allowManagedHooksOnly"):
         r.fail("kill-switch", "allowManagedHooksOnly is set — plugin hooks are skipped")
-    dup = [c for c in json.dumps(s.get("hooks", {})).split('"') if "hardmode" in c and c.endswith(".py")]
+    shipped = {f for f in os.listdir(os.path.join(ROOT, "hooks")) if f.endswith(".py") and not f.startswith("_")}
+    dup = []
+    for groups in (s.get("hooks") or {}).values():
+        for g in groups if isinstance(groups, list) else []:
+            for h in (g.get("hooks") or []) if isinstance(g, dict) else []:
+                cmd = h.get("command", "") if isinstance(h, dict) else ""
+                name = cmd.rstrip('"\'').split("/")[-1]
+                if name in shipped:
+                    dup.append(name)
     if dup:
-        r.fail("double-wiring", f"settings.json also wires hardmode hooks ({len(dup)}) — every event fires twice; remove them, the plugin owns the wiring")
+        r.fail("double-wiring", f"settings.json also wires the plugin's hooks ({', '.join(sorted(set(dup)))}) — every event fires twice; remove them, the plugin owns the wiring")
     if s.get("effortLevel") in ("xhigh", "high"):
         r.ok("effortLevel", s["effortLevel"])
     else:

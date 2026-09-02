@@ -48,8 +48,9 @@ def say(text=""):
 
 def run_hook(hook, payload, env_extra=None):
     env = dict(os.environ)
-    for k in ("HARDMODE_LOOP_THRESHOLD", "HARDMODE_DESTRUCTIVE_OK", "HARDMODE_PREFLIGHT",
-              "HARDMODE_READONLY_AGENTS", "CLAUDE_DIR", "CLAUDE_CODE_REMOTE_MEMORY_DIR"):
+    for k in ("HARDMODE_LOOP_THRESHOLD", "HARDMODE_DESTRUCTIVE_OK", "HARDMODE_PREFLIGHT", "HARDMODE_LEDGER",
+              "HARDMODE_READONLY_AGENTS", "HARDMODE_MEM_FS_CASE_INSENSITIVE", "HARDMODE_SELFTEST",
+              "CLAUDE_DIR", "CLAUDE_CODE_REMOTE_MEMORY_DIR"):
         env.pop(k, None)
     env["HARDMODE_STATE_DIR"] = STATE_DIR
     env["CLAUDE_CONFIG_DIR"] = os.path.join(STATE_DIR, "config")
@@ -81,16 +82,25 @@ def write_transcript(name, entries):
     return str(p)
 
 
+def hermetic_git_env():
+    """Git isolated from the operator's global config (a global commit.gpgsign or
+    core.hooksPath must not turn the self-test red)."""
+    return dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="demo", GIT_AUTHOR_EMAIL="demo@x",
+                GIT_COMMITTER_NAME="demo", GIT_COMMITTER_EMAIL="demo@x")
+
+
 def make_scratch_repo(name="scratch-repo"):
     repo = Path(STATE_DIR) / name
     if not repo.exists():
         repo.mkdir()
-        subprocess.run(["git", "init", "-q"], cwd=repo, check=True, capture_output=True)
-        subprocess.run(["git", "config", "user.email", "demo@x"], cwd=repo, check=True)
-        subprocess.run(["git", "config", "user.name", "demo"], cwd=repo, check=True)
+        env = hermetic_git_env()
+        git = lambda *a: subprocess.run(["git", "-c", "commit.gpgsign=false", *a], cwd=repo, check=True,  # noqa: E731
+                                        capture_output=True, env=env)
+        git("init", "-q")
         (repo / "tracked.txt").write_text("v1", encoding="utf-8")
-        subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-        subprocess.run(["git", "commit", "-q", "-m", "init"], cwd=repo, check=True, capture_output=True)
+        git("add", "-A")
+        git("commit", "-q", "--no-verify", "-m", "init")
         (repo / "work.txt").write_text("uncommitted work", encoding="utf-8")
     return str(repo)
 

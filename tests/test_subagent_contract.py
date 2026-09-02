@@ -83,3 +83,28 @@ def test_other_agents_and_empty_messages_are_ignored(tmp_path):
     assert run_hook(tmp_path, "general-purpose", "whatever").returncode == 0
     assert run_hook(tmp_path, "hardmode:verifier", "").returncode == 0
     assert run_hook(tmp_path, "hardmode:verifier", "x", raw="not json").returncode == 0
+
+
+def test_markdown_emphasis_and_case_are_not_violations(tmp_path):
+    t = transcript(tmp_path)
+    for msg in ("**VERDICT:** Confirmed\n**EVIDENCE:** ran pytest -q -> 12 passed\n**GAPS:** none",
+                "_VERDICT_: refuted\nEVIDENCE: x\nGAPS: y", "`VERDICT: PARTIAL`\nEVIDENCE: x\nGAPS: y",
+                "## VERDICT: CONFIRMED\nEVIDENCE: ran it\nGAPS: none"):
+        assert run_hook(tmp_path, "hardmode:verifier", msg, t).returncode == 0, msg
+    r = run_hook(tmp_path, "hardmode:verifier", "**VERDICT:** Maybe\nEVIDENCE: x\nGAPS: y", t)
+    assert r.returncode == 2 and "VERDICT" in r.stderr
+    r = run_hook(tmp_path, "hardmode:oracle", "DIAGNOSIS: x\n**CONFIDENCE:** High\nALTERNATIVES: none\nNEXT EXPERIMENT: y")
+    assert r.returncode == 0
+
+
+def test_contract_keys_match_the_subagentstop_wiring():
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("gate", HOOK)
+    gate = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(gate)
+    wiring = json.loads((HOOK.parent / "hooks.json").read_text())
+    matchers = set()
+    for entry in wiring["hooks"]["SubagentStop"]:
+        if any("subagentstop-contract-gate" in h["command"] for h in entry["hooks"]):
+            matchers |= {m.split(":")[-1] for m in entry["matcher"].split("|")}
+    assert matchers == set(gate.CONTRACTS), "every contract is wired and every wired agent has a contract"

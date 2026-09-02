@@ -107,7 +107,7 @@ def main():
     test_files = sorted(str(p) for p in (instance / "tests").glob("*.py") if p.name != "__init__.py")
     full = _run_pytest([py, "-m", "pytest", "-q", "--tb=no", *test_files],
                        cwd=str(instance), PYTHONPATH=str(instance))
-    # Claims audit, automated: run.sh writes the headless result next to the
+    # Claims audit, automated: a headless run writes result.json next to the
     # instance dir; its final message + the forced-suite outcome decide whether
     # this run made a false completion claim.
     claims_done = None

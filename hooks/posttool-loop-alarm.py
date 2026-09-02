@@ -43,9 +43,9 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _hardmode import (ledger, locked, looks_like_test_run, prune_stale,  # noqa: E402
-                       read_json, reconfigure_utf8, scope_slug, state_dir,
-                       write_json_atomic)
+from _hardmode import (FAILURE_OUTPUT, ledger, locked, looks_like_test_run,  # noqa: E402
+                       normalize_cmd, prune_stale, read_json, reconfigure_utf8,
+                       response_text, scope_slug, state_dir, write_json_atomic)
 
 THRESHOLD_DEFAULT = 3
 MAX_TRACKED = 50
@@ -68,7 +68,7 @@ SHELL_TOOLS = {"Bash"}
 # A SUCCEEDING shell command clears the grind counter ONLY when it mutates source.
 # Deliberately NARROWER than the claim gate's SHELL_WRITE: no bare redirects, no tee.
 LOOP_RESET = re.compile(
-    r"(?:^|[|&;]\s*)(?:sed\s+(?:-\S+\s+)*-i|patch\s"
+    r"(?:^|[|&;\n]\s*)(?:[A-Za-z_]\w*=\S*\s+)*(?:sudo\s+)?(?:sed\s+(?:-\S+\s+)*-i|patch\s"
     r"|(?:git\s+(?:apply|mv|rm|checkout|restore|stash))|mv\s|cp\s)"
 )
 
@@ -94,8 +94,15 @@ def _h(s):
 
 
 def norm_cmd(tool_input):
+    """Whitespace-collapsed form for the grind KEY (a re-run differing only in
+    whitespace is the same grind); the reset/check classification uses the
+    newline-preserving form from _hardmode.normalize_cmd."""
     cmd = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
     return re.sub(r"\s+", " ", cmd).strip() if isinstance(cmd, str) else ""
+
+
+def raw_cmd(tool_input):
+    return normalize_cmd(tool_input.get("command", "")) if isinstance(tool_input, dict) else ""
 
 
 def grind_key(tool, tool_input):
@@ -175,21 +182,25 @@ def main():
             return 0  # the user hit Esc — not a failing command
 
         if not is_failure:
-            cmd = norm_cmd(tool_input) if tool in SHELL_TOOLS else ""
+            cmd = raw_cmd(tool_input) if tool in SHELL_TOOLS else ""
             if tool in MODIFYING_TOOLS or (cmd and LOOP_RESET.search(cmd)):
                 state["counts"] = {}
                 state["edits"] += 1
                 save_state(path, state)
                 return 0
             if cmd:
-                if looks_like_test_run(cmd):
-                    state["green_at"] = state["edits"]   # a check passed at this edit count
+                # A check counts as green only if it ran at command position AND its
+                # output does not say it failed (`pytest || true` exits 0 regardless).
+                if looks_like_test_run(cmd) and not FAILURE_OUTPUT.search(response_text(data.get("tool_response"))):
+                    state["green_at"] = state["edits"]
                 state["counts"].pop(key, None)
                 save_state(path, state)
             return 0
 
         if not key:
             return 0
+        if key.startswith("ed:"):
+            return 0   # every Edit attempt was already counted at PreToolUse — never twice
         n = state["counts"].get(key, 0) + 1
         state["counts"][key] = n
         if n >= threshold() and key not in state["nudged"]:

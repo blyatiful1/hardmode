@@ -45,10 +45,14 @@ def test_every_shipped_hook_has_a_scenario():
 
 
 def test_demo_writes_no_state_to_the_users_real_dir(tmp_path):
-    real_state = Path.home() / ".claude" / "tmp" / "hardmode"
+    claude_dir = Path.home() / ".claude"
+    watched = [claude_dir / "tmp" / "hardmode", claude_dir / "memory", claude_dir / "projects"]
 
     def snapshot():
-        return {p.name for p in real_state.iterdir()} if real_state.exists() else None
+        out = {}
+        for d in watched:
+            out[str(d)] = sorted((str(p.relative_to(d)), p.stat().st_mtime_ns) for p in d.rglob("*")) if d.exists() else None
+        return out
 
     before = snapshot()
     box = tmp_path / "box"
@@ -57,8 +61,7 @@ def test_demo_writes_no_state_to_the_users_real_dir(tmp_path):
     env.pop("HARDMODE_STATE_DIR", None)
     r = run_demo(env=env)
     assert r.returncode == 0, r.stdout + r.stderr
-    assert snapshot() == before
-    assert not (Path.home() / ".claude" / "memory" / "privacy.toml").exists() or True  # never created by the demo
+    assert snapshot() == before, "the demo touched the operator's real ~/.claude state, memory or projects"
 
 
 def test_readme_console_block_matches_the_real_demo_output():
@@ -67,7 +70,14 @@ def test_readme_console_block_matches_the_real_demo_output():
     readme = (ROOT / "README.md").read_text(encoding="utf-8")
     block = re.search(r"```console\n\$ python tools/demo.py\n(.*?)```", readme, re.S)
     assert block, "README has no demo console block"
-    real = run_demo().stdout
-    for line in block.group(1).splitlines():
-        if line.startswith("SCENARIO") or line.startswith("demo:"):
-            assert line in real, f"README demo transcript line is not real output: {line!r}"
+    real = run_demo().stdout.splitlines()
+    shown = [ln for ln in block.group(1).splitlines() if ln.strip()]
+    assert shown, "README demo block is empty"
+    # ...every line, in the order the program prints them (repeated lines such as `[ok]`
+    # are matched as a subsequence, not by first occurrence)
+    pos = 0
+    for line in shown:
+        try:
+            pos = real.index(line, pos) + 1
+        except ValueError:
+            raise AssertionError(f"README demo transcript line is not real output (in order): {line!r}") from None

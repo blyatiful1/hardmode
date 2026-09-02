@@ -5,10 +5,21 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 HOOK = Path(__file__).resolve().parents[1] / "hooks" / "pretool-destructive-guard.py"
 
 
-def run_hook(command, cwd=None, tool_name="Bash", raw_stdin=None, state_dir=None, extra=None):
+@pytest.fixture(autouse=True)
+def _isolated_state(tmp_path, monkeypatch):
+    # Every test gets its own state dir: the guard's ledger must never land in the
+    # operator's real ~/.claude/tmp/hardmode, nor in a shared /tmp path that a
+    # parallel run could race on.
+    monkeypatch.setenv("HARDMODE_STATE_DIR", str(tmp_path / "guard-state"))
+
+
+def run_hook(command, cwd=None, tool_name="Bash", raw_stdin=None, state_dir=None, extra=None,
+             env_extra=None, proc_cwd=None):
     payload = {"tool_name": tool_name, "tool_input": {"command": command},
                "hook_event_name": "PreToolUse", "session_id": "guard-test"}
     if cwd is not None:
@@ -17,16 +28,26 @@ def run_hook(command, cwd=None, tool_name="Bash", raw_stdin=None, state_dir=None
         payload.update(extra)
     env = dict(os.environ)
     env.pop("HARDMODE_DESTRUCTIVE_OK", None)
-    env["HARDMODE_STATE_DIR"] = str(state_dir) if state_dir else env.get("HARDMODE_STATE_DIR", "/tmp/hardmode-guard-test-state")
+    if state_dir:
+        env["HARDMODE_STATE_DIR"] = str(state_dir)
+    assert "HARDMODE_STATE_DIR" in env
+    env.update(env_extra or {})
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=raw_stdin if raw_stdin is not None else json.dumps(payload),
-        capture_output=True, text=True, timeout=30, env=env,
+        capture_output=True, text=True, timeout=30, env=env, cwd=proc_cwd,
     )
 
 
+HERMETIC_GIT = dict(os.environ, GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_SYSTEM=os.devnull,
+                    GIT_CONFIG_NOSYSTEM="1", GIT_AUTHOR_NAME="t", GIT_AUTHOR_EMAIL="t@example.com",
+                    GIT_COMMITTER_NAME="t", GIT_COMMITTER_EMAIL="t@example.com")
+
+
 def git(repo, *args):
-    subprocess.run(["git", *args], cwd=repo, check=True, capture_output=True)
+    # Isolated from the operator's global git config (commit.gpgsign, hooksPath, ...).
+    subprocess.run(["git", "-c", "commit.gpgsign=false", *args], cwd=repo, check=True,
+                   capture_output=True, env=HERMETIC_GIT)
 
 
 def make_repo(tmp_path, dirty, name="repo"):
@@ -453,3 +474,110 @@ def test_ledger_can_be_disabled(tmp_path):
                        capture_output=True, text=True, timeout=30, env=env)
     assert r.returncode == 2
     assert not (state / "ledger-s.jsonl").exists()
+
+
+# ---- review-round regressions ---------------------------------------------------------
+
+def test_quoted_branch_names_are_read_and_substituted_ones_block(tmp_path):
+    # The merged-check runs `git branch --no-merged` and compares NAMES: a quoted name is
+    # still a name; a command substitution or variable cannot be compared, so it blocks.
+    repo = make_repo(tmp_path, dirty=False)
+    git(repo, "branch", "merged")
+    git(repo, "checkout", "-q", "-b", "wip")
+    (repo / "wip.txt").write_text("w")
+    git(repo, "add", "-A")
+    git(repo, "commit", "-q", "-m", "wip")
+    git(repo, "checkout", "-q", "main")
+    for cmd in ("git branch -D merged", 'git branch -D "merged"', "git branch -D 'merged'", "git branch --delete --force merged"):
+        assert run_hook(cmd, cwd=repo).returncode == 0, cmd
+    for cmd in ("git branch -D wip", 'git branch -D "wip"', "git branch -D merged wip", "git branch -D $(git branch --show-current)",
+                "git branch -D `cat name`", "git branch -D ${BR}", "git branch -D $BR"):
+        assert run_hook(cmd, cwd=repo).returncode == 2, cmd
+    assert run_hook("git branch -d wip", cwd=repo).returncode == 0          # -d refuses unmerged by itself
+
+
+def test_quoted_paths_are_scoped_like_bare_ones(tmp_path):
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook('git checkout -- "tracked.txt"', cwd=repo).returncode == 0     # unmodified
+    (repo / "tracked.txt").write_text("changed\n")
+    assert run_hook('git checkout -- "tracked.txt"', cwd=repo).returncode == 2
+    assert run_hook("git checkout -- 'tracked.txt'", cwd=repo).returncode == 2
+    assert run_hook('git restore "tracked.txt"', cwd=repo).returncode == 2
+
+
+def test_home_and_pwd_expansion_cannot_hide_the_repo(tmp_path):
+    repo = make_repo(tmp_path, dirty=True)
+    env = {"HOME": str(tmp_path)}
+    for cmd in ("rm -rf $HOME/repo", "rm -rf ${HOME}/repo", "rm -rf ~/repo", "rm -rf $PWD",
+                "rm -rf $(pwd)", "rm -rf $(git rev-parse --show-toplevel)", "R=$HOME/repo; rm -rf $R"):
+        assert run_hook(cmd, cwd=repo, env_extra=env).returncode == 2, cmd
+    assert run_hook("rm -rf $HOME/elsewhere", cwd=repo, env_extra=env).returncode == 0
+
+
+def test_find_piped_into_xargs_rm_is_judged_by_its_start_dirs(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    for cmd in ("find / -name '*.tmp' | xargs rm -rf", "find ~ -type f | xargs -0 rm -f", "find $HOME -name x | xargs rm -r",
+                "find /usr /etc -name x | xargs rm -rf", "find / -name x -print0 | xargs -0 rm -rf"):
+        assert run_hook(cmd, cwd=repo).returncode == 2, cmd
+    (repo / "build").mkdir()
+    # a targeted find inside the tree is the everyday idiom (a piped rm cannot be judged
+    # for uncommitted work — that needs literal paths — so only catastrophic roots block)
+    for cmd in ("find ./build -name '*.o' | xargs rm -f", "find . -name '*.pyc' -delete", f"find {repo} -name x | xargs rm -rf",
+                "find build -type f -exec rm -f {} \\;", "git ls-files | xargs rm -f", "echo build | xargs rm -rf"):
+        assert run_hook(cmd, cwd=repo).returncode == 0, cmd
+
+
+def test_force_if_includes_is_the_safe_push(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    for cmd in ("git push --force-with-lease --force-if-includes origin main",
+                "git push --force-with-lease=main:abc123 --force-if-includes origin main",
+                "git push --force --dry-run origin main"):
+        assert run_hook(cmd, cwd=repo).returncode == 0, cmd
+    for cmd in ("git push --force origin main", "git push -f origin main", "git push --force-if-includes --force origin main",
+                "git push origin +main", "git push -uf origin main"):
+        assert run_hook(cmd, cwd=repo).returncode == 2, cmd
+
+
+def test_unquoted_heredoc_prose_is_not_a_command(tmp_path):
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook("cat <<EOF\nNever run rm -rf / or git reset --hard here.\nEOF", cwd=repo).returncode == 0
+    assert run_hook("cat <<'EOF'\nrm -rf /\nEOF", cwd=repo).returncode == 0
+    assert run_hook("cat > notes.md <<EOF\n# git push --force is banned\nEOF", cwd=repo).returncode == 0
+    # ...but an unquoted body still EXECUTES substitutions, and a heredoc fed to a shell runs
+    assert run_hook("cat <<EOF\n$(rm -rf /)\nEOF", cwd=repo).returncode == 2
+    assert run_hook("bash <<EOF\nrm -rf /\nEOF", cwd=repo).returncode == 2
+    assert run_hook("sh <<'EOF'\ngit reset --hard\nEOF", cwd=repo).returncode == 2
+
+
+def test_multi_line_commands_are_matched_after_a_newline(tmp_path):
+    repo = make_repo(tmp_path, dirty=True)
+    for cmd in ("echo start\ngit push --force origin main", "set -e\nrm -rf /", "cd src\ngit reset --hard",
+                "git status \\\n  && git checkout -- .", "true\n\ngit stash drop"):
+        assert run_hook(cmd, cwd=repo).returncode == 2, cmd
+    assert run_hook("echo one\necho 'rm -rf /'\ngit status", cwd=repo).returncode == 0
+
+
+def test_missing_cwd_falls_back_to_the_process_directory(tmp_path):
+    repo = make_repo(tmp_path, dirty=True)
+    assert run_hook("git reset --hard", cwd=None, proc_cwd=repo).returncode == 2
+    assert run_hook("git reset --hard", cwd=None, proc_cwd=make_repo(tmp_path, dirty=False, name="clean")).returncode == 0
+
+
+def test_symlinked_repo_path_is_recognised(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    link = tmp_path / "link"
+    link.symlink_to(repo, target_is_directory=True)
+    assert run_hook(f"rm -rf {link}", cwd=repo).returncode == 2
+    assert run_hook(f"rm -rf {link}/.git", cwd=repo).returncode == 2
+    assert run_hook("rm -rf ../link", cwd=repo).returncode == 2
+
+
+def test_always_dangerous_git_plumbing(tmp_path):
+    repo = make_repo(tmp_path, dirty=False)
+    for cmd in ("git stash drop", "git stash clear", "git reflog expire --expire=now --all", "git gc --prune=now",
+                "git update-ref -d refs/heads/main", "git worktree remove --force ../wt", "git push origin --delete main",
+                "git push origin :main", "shred -u secrets.txt"):
+        assert run_hook(cmd, cwd=repo).returncode == 2, cmd
+    for cmd in ("git stash", "git stash list", "git reflog", "git gc", "git worktree remove ../wt",
+                "git push origin --delete main --dry-run", "git push origin main"):
+        assert run_hook(cmd, cwd=repo).returncode == 0, cmd

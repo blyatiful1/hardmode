@@ -55,7 +55,10 @@ def self_test():
     if not os.path.isfile(demo):
         return None
     env = dict(os.environ)
-    env.pop("HARDMODE_STATE_DIR", None)
+    for k in ("HARDMODE_STATE_DIR", "HARDMODE_LEDGER", "HARDMODE_LOOP_THRESHOLD", "HARDMODE_DESTRUCTIVE_OK",
+              "HARDMODE_PREFLIGHT", "HARDMODE_READONLY_AGENTS", "HARDMODE_MEM_FS_CASE_INSENSITIVE",
+              "HARDMODE_SELFTEST", "CLAUDE_DIR", "CLAUDE_CODE_REMOTE_MEMORY_DIR"):
+        env.pop(k, None)
     try:
         p = subprocess.run([sys.executable, demo, "--quiet"], capture_output=True, text=True,
                            timeout=DEMO_TIMEOUT, env=env)
@@ -92,10 +95,7 @@ def main():
         return 0                      # the recovery hook owns that path
     d = state_dir()
     ledger(data, "floor-check", "ran", data.get("source") or "")
-    out = []
-    prev = previous_session_line(d, session_slug(data))
-    if prev:
-        out.append(prev)
+    degraded, info = "", ""
     fp = harness_fingerprint()
     if fp and os.environ.get("HARDMODE_SELFTEST", "1") != "0":
         fp_path = os.path.join(d, "harness-fp.txt")
@@ -105,27 +105,31 @@ def main():
         except OSError:
             seen = ""
         if seen != fp:
+            why = "first session on this machine" if not seen else "Claude Code binary changed since the last check"
             res = self_test()
-            try:
-                with open(fp_path, "w", encoding="utf-8") as f:
-                    f.write(fp)
-            except OSError:
-                pass
             if res is None:
-                out.append("hardmode: Claude Code binary changed; the hook self-test could not run "
-                           "(python3/tools/demo.py unavailable) — run `python3 tools/demo.py` yourself.")
+                info = (f"hardmode: {why}; the hook self-test could not run (python3/tools/demo.py "
+                        "unavailable) — run `python3 tools/demo.py` yourself.")
                 ledger(data, "floor-check", "selftest-unavailable")
             elif res[0]:
-                out.append(f"hardmode: Claude Code binary changed since the last check; hook self-test OK ({res[1]}).")
+                # remember this binary ONLY on a green self-test, so a degraded floor is
+                # re-tested and re-announced every session until it is fixed
+                try:
+                    with open(fp_path, "w", encoding="utf-8") as f:
+                        f.write(fp)
+                except OSError:
+                    pass
+                info = f"hardmode: {why}; hook self-test OK ({res[1]})."
                 ledger(data, "floor-check", "selftest-ok", res[1])
             else:
-                out.append("HARDMODE FLOOR DEGRADED — the Claude Code binary changed and the hook self-test "
-                           f"FAILED ({res[1]}). These guards are no longer firing: "
-                           + " | ".join(res[2]) + " — treat their advisory rules as unenforced until fixed.")
+                degraded = (f"HARDMODE FLOOR DEGRADED — {why} and the hook self-test FAILED ({res[1]}). "
+                            "These guards are no longer firing: " + " | ".join(res[2])
+                            + " — treat their advisory rules as unenforced until fixed.")
                 ledger(data, "floor-check", "selftest-fail", res[1])
-    text = "\n".join(out)
-    if text:
-        print(text[:MAX_OUT])
+    prev = previous_session_line(d, session_slug(data))
+    parts = [p for p in (degraded[:MAX_OUT], info[:300], prev[:300]) if p]
+    if parts:
+        print("\n".join(parts))
     return 0
 
 

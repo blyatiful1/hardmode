@@ -245,15 +245,21 @@ def test_successful_edit_clears_the_edit_grind(tmp_path):
     assert edit_attempt(tmp_path, "/w/x.py", "def foo():").returncode == 0
 
 
-def test_runtime_edit_failures_count_too(tmp_path):
-    # A stale-read Edit failure DOES fire PostToolUseFailure on 2.1.x; it must accumulate
-    # under the same key as the PreToolUse attempts.
+def test_runtime_edit_failures_are_not_double_counted(tmp_path):
+    # Every Edit attempt is counted once, at PreToolUse. A stale-read failure that then
+    # fires PostToolUseFailure for the same attempt must NOT count again — otherwise two
+    # attempts would already trip a threshold of three.
     payload = {"file_path": "/w/x.py", "old_string": "a", "new_string": "b"}
-    run_hook(tmp_path, "Edit", payload, {}, event="PostToolUseFailure",
-             error="File content has changed since it was last read")
-    run_hook(tmp_path, "Edit", payload, {}, event="PostToolUseFailure",
-             error="File content has changed since it was last read")
-    assert edit_attempt(tmp_path, "/w/x.py", "a").returncode == 2
+    for _ in range(2):
+        assert edit_attempt(tmp_path, "/w/x.py", "a").returncode == 0
+        assert run_hook(tmp_path, "Edit", payload, {}, event="PostToolUseFailure",
+                        error="File content has changed since it was last read").returncode == 0
+    assert edit_attempt(tmp_path, "/w/x.py", "a").returncode == 2      # 3rd attempt, not 5th
+    # failures that were never attempted through PreToolUse do not count at all
+    for _ in range(3):
+        assert run_hook(tmp_path, "Edit", {**payload, "old_string": "q"}, {}, event="PostToolUseFailure",
+                        error="x").returncode == 0
+    assert edit_attempt(tmp_path, "/w/x.py", "q").returncode == 0
 
 
 def test_other_pretooluse_events_are_ignored(tmp_path):
@@ -297,3 +303,39 @@ def test_nudge_is_written_to_the_ledger(tmp_path):
         fail_event(tmp_path, "pytest -q")
     recs = [json.loads(ln) for ln in (tmp_path / "ledger-s1.jsonl").read_text().splitlines()]
     assert any(r["hook"] == "loop-alarm" and r["outcome"] == "nudge" for r in recs)
+
+
+def _state(tmp_path, scope="s1"):
+    return json.loads((tmp_path / f"loop-alarm-{scope}.json").read_text())
+
+
+def test_a_check_that_reports_failure_is_not_green_even_if_it_exits_zero(tmp_path):
+    run_hook(tmp_path, "Write", {"file_path": "/w/x.py", "content": "x"}, {})
+    assert _state(tmp_path)["edits"] == 1 and _state(tmp_path).get("green_at", -1) in (-1, None)
+    run_hook(tmp_path, "Bash", {"command": "pytest -q || true"}, {"stdout": "1 failed, 3 passed", "stderr": ""})
+    assert _state(tmp_path).get("green_at", -1) in (-1, None)
+    run_hook(tmp_path, "Bash", {"command": "pytest -q 2>&1 | tail -3"}, {"stdout": "FAILED tests/test_x.py::t", "stderr": ""})
+    assert _state(tmp_path).get("green_at", -1) in (-1, None)
+    run_hook(tmp_path, "Bash", {"command": "pytest -q"}, {"stdout": "4 passed in 0.1s", "stderr": ""})
+    assert _state(tmp_path)["green_at"] == 1
+
+
+def test_only_a_runner_at_command_position_counts_as_a_check(tmp_path):
+    hm = _load("_hardmode.py")
+    for cmd in ("pytest -q", "cd x && pytest", "uv run pytest tests/", "python -m pytest", "npm test",
+                "make check", "./verify.sh", "sudo make test", "FOO=1 pytest", "echo a\npytest -q"):
+        assert hm.looks_like_test_run(cmd), cmd
+    for cmd in ("cat pytest.ini", "vim tests/test_x.py", "grep -n pytest README.md", "echo 'run pytest later'",
+                "ls pytest-results/", "git log --grep pytest", "pip install pytest"):
+        assert not hm.looks_like_test_run(cmd), cmd
+
+
+def test_loop_reset_verbs_are_matched_after_a_newline(tmp_path):
+    fail_event(tmp_path, "pytest -q")
+    fail_event(tmp_path, "pytest -q")
+    assert _state(tmp_path)["counts"]
+    run_hook(tmp_path, "Bash", {"command": "set -e\nsed -i 's/a/b/' f.py"}, {"stdout": "", "stderr": ""})
+    assert _state(tmp_path)["counts"] == {} and _state(tmp_path)["edits"] == 1
+    assert fail_event(tmp_path, "pytest -q").returncode == 0
+    assert fail_event(tmp_path, "pytest -q").returncode == 0
+    assert fail_event(tmp_path, "pytest -q").returncode == 2

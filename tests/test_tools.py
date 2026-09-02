@@ -165,6 +165,66 @@ def test_memcheck_where_and_dupes_and_privacy(tmp_path):
     assert r.returncode == 1 and "leak.md:1" in r.stdout
 
 
+def test_memcheck_only_treats_a_truthy_disable_flag_as_disabled(tmp_path):
+    cfg = tmp_path / "cfg"
+    project = tmp_path / "proj"
+    project.mkdir()
+    for v in ("0", "false", "no", "off", ""):
+        r = run("memcheck.py", ["--where", "--cwd", str(project)], cfg, {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": v})
+        assert r.returncode == 0 and "disabled" not in r.stdout.lower(), v
+    r = run("memcheck.py", ["--where", "--cwd", str(project)], cfg, {"CLAUDE_CODE_DISABLE_AUTO_MEMORY": "1"})
+    assert "disabled" in r.stdout.lower()
+
+
+def test_stats_since_does_not_count_filtered_out_sessions_as_live(tmp_path):
+    import time
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    now = time.time()
+    sessions(cfg, [
+        {"session": "old", "reason": "other", "ended": now - 10 * 86400, "events": 1, "by_hook": {"floor-check:ran": 1}},
+        {"session": "new", "reason": "other", "ended": now - 60, "events": 1, "by_hook": {"floor-check:ran": 1}},
+    ])
+    (cfg / "tmp" / "hardmode" / "ledger-old.jsonl").write_text(json.dumps({"hook": "floor-check", "outcome": "ran"}) + "\n")
+    j = json.loads(run("stats.py", ["--json", "--since", "1"], cfg).stdout)
+    assert j["sessions_ended"] == 1 and j["sessions_live"] == 0
+    j = json.loads(run("stats.py", ["--json"], cfg).stdout)
+    assert j["sessions_ended"] == 2 and j["sessions_live"] == 0
+
+
+def test_doctor_double_wiring_is_detected_by_hook_basename(tmp_path):
+    cfg = tmp_path / "cfg"
+    cfg.mkdir()
+    (cfg / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "python3 /opt/kits/guards/pretool-destructive-guard.py"}]}]}}))
+    r = run("doctor.py", ["--strict"], cfg)
+    assert "FAIL double-wiring" in r.stdout and "pretool-destructive-guard.py" in r.stdout
+    (cfg / "settings.json").write_text(json.dumps({"hooks": {"PreToolUse": [{"matcher": "Bash", "hooks": [
+        {"type": "command", "command": "python3 /opt/kits/guards/my-own-guard.py"}]}]}}))
+    assert "double-wiring" not in run("doctor.py", ["--strict"], cfg).stdout
+
+
+def test_doctor_notes_when_it_runs_from_the_installed_snapshot(tmp_path):
+    # /hardmode:doctor runs the copy inside the plugin cache; from there, drift against
+    # the operator's clone is not checkable and doctor must say so instead of "OK".
+    import shutil
+    cfg = tmp_path / "cfg"
+    snap = tmp_path / "cache" / "hardmode" / "3.1.0"
+    shutil.copytree(ROOT, snap, ignore=shutil.ignore_patterns(".git", "tests", "__pycache__", ".pytest_cache", "bench"))
+    version = json.loads((ROOT / ".claude-plugin" / "plugin.json").read_text())["version"]
+    (cfg / "plugins").mkdir(parents=True)
+    (cfg / "plugins" / "installed_plugins.json").write_text(json.dumps({"version": 2, "plugins": {
+        "hardmode@hardmode": [{"scope": "user", "installPath": str(snap), "version": version}]}}))
+    (cfg / "settings.json").write_text(json.dumps({"enabledPlugins": {"hardmode@hardmode": True}}))
+    env = dict(os.environ, CLAUDE_CONFIG_DIR=str(cfg), HARDMODE_STATE_DIR=str(cfg / "tmp" / "hardmode"), CLAUDE_PLUGIN_ROOT=str(snap))
+    r = subprocess.run([sys.executable, str(snap / "tools" / "doctor.py")], capture_output=True, text=True, timeout=180, env=env)
+    assert r.returncode == 0, r.stdout + r.stderr
+    assert "running from the installed snapshot" in r.stdout and "drift against your clone is not" in r.stdout
+    # the same registration seen from the clone is a plain OK (versions match)
+    r = run("doctor.py", [], cfg)
+    assert "installed snapshot" not in r.stdout and "OK   plugin " in r.stdout
+
+
 # ---- commands ----
 
 def test_commands_have_frontmatter_and_run_shipped_tools():

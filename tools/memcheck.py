@@ -66,7 +66,7 @@ def topic_files(d):
 
 def where(cwd):
     d = memory_dir(cwd)
-    disabled = os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY")
+    disabled = os.environ.get("CLAUDE_CODE_DISABLE_AUTO_MEMORY", "").strip().lower() not in ("", "0", "false", "no", "off")
     print(f"memory root:  {memory_root()}")
     print(f"project slug: {slug(cwd)}")
     print(f"corpus dir:   {d} ({'exists' if os.path.isdir(d) else 'not created yet'})")

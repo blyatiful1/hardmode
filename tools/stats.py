@@ -25,11 +25,13 @@ FIRING = ("block", "nudge", "deny", "deny-edit", "override")
 def collect(since_days, last_n):
     d = state_dir(create=False)
     cutoff = time.time() - since_days * 86400 if since_days else 0
-    sessions = [s for s in iter_jsonl(os.path.join(d, "sessions.jsonl")) if int(s.get("ended", 0) or 0) >= cutoff]
+    all_sessions = list(iter_jsonl(os.path.join(d, "sessions.jsonl")))
+    sessions = [s for s in all_sessions if int(s.get("ended", 0) or 0) >= cutoff]
     if last_n:
         sessions = sessions[-last_n:]
     live = {}
-    ended = {s.get("session") for s in sessions}
+    # a session rolled up at ANY time is not live, even when the window excludes it
+    ended = {s.get("session") for s in all_sessions}
     for path in glob.glob(os.path.join(d, "ledger-*.jsonl")):
         sid = os.path.basename(path)[7:-6]
         if sid in ended:

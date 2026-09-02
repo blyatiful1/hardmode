@@ -34,7 +34,11 @@ def test_clean_script_passes(tmp_path):
 
 
 @pytest.mark.parametrize("src,needle", [
-    (META + "const r = await agent('x', { phase: 'Hunt' })\nreturn r", "no explicit model"),
+    (META + "const r = await agent('x', { phase: 'Hunt' })\nreturn r", "no explicit top-level model"),
+    (META + "const OPTS = { effort: 'high' }\nreturn await agent('x', OPTS)", "no explicit top-level model"),
+    (META + "const OPTS = { effort: 'high' }\nreturn await agent('x', { ...OPTS })", "no explicit top-level model"),
+    (META + "const V = 'verifier'\nreturn await agent('x', { model: 'opus', agentType: V })", "namespaced"),
+    (META + "const V = someCall()\nreturn await agent('x', { model: 'opus', agentType: V })", "cannot be checked"),
     (META + "const r = await agent('x', { model: 'opus', agentType: 'verifier' })\nreturn r", "namespaced"),
     (META + "const r = await agent('x', { model: 'opus', agentType: 'verifer' })\nreturn r", "not a known agent"),
     (META + "phase('Reconnoiter')\nconst r = await agent('x', { model: 'opus' })\nreturn r", "not declared in meta.phases"),
@@ -52,6 +56,10 @@ def test_clean_script_passes(tmp_path):
     ("export const meta = { name: 'p' }\nreturn 1", "missing required string field: description"),
     ("return 1", "missing `export const meta"),
     (META + "const r = await agent('x', { model: 'opus' }\nreturn r", "does not compile"),
+    # a `model` key nested inside the schema is not a model pin
+    (META + "const r = await agent('x', { phase: 'Hunt', schema: { type: 'object', properties: { model: { type: 'string' } } } })\nreturn r", "no explicit top-level model"),
+    # meta must be the first statement
+    ("const x = 1\n" + META + "return x", "FIRST statement"),
 ])
 def test_defects_are_caught(tmp_path, src, needle):
     code, out = lint(tmp_path, src)
@@ -69,6 +77,20 @@ def test_defects_are_caught(tmp_path, src, needle):
     META + "const S = { type: 'object', properties: { a: { type: 'string' } } }\nconst r = await agent('x', { model: 'opus', schema: S })\nconst q = await agent('y', { model: 'opus', schema: { type: 'object', properties: {} } })\nreturn [r, q]",
     # built-in agent types resolve
     META + "const r = await agent('x', { model: 'opus', agentType: 'general-purpose' })\nreturn r",
+    # type-last schema, braces/brackets inside strings, no-space meta, comment before meta
+    META + "const S = { properties: { a: { type: 'string' } }, required: ['a'], type: 'object' }\nreturn await agent('x', { model: 'opus', schema: S })",
+    "export const meta={name:'p',description:'uses {braces} and ] brackets, phase: none',phases:[{title:'Hunt'}]}\nphase('Hunt')\nreturn await agent('x',{model:'opus'})",
+    "// header comment\n/* block */\n" + META + "return await agent('x', { model: 'opus' })",
+    # plain template literals are literals
+    "export const meta = { name: `p`, description: `plain template`, phases: [{ title: `Hunt` }] }\nphase(`Hunt`)\nreturn await agent('x', { model: 'opus', phase: `Hunt` })",
+    # opts as a const object or a spread of one
+    META + "const OPTS = { model: 'opus', agentType: 'hardmode:scout' }\nconst a = await agent('x', OPTS)\nconst b = await agent('y', { ...OPTS, phase: 'Hunt' })\nreturn [a, b]",
+    # `phase:` inside a prompt string is text, not a phase reference
+    META + "return await agent('report phase: done and phase(\"Bogus\")', { model: 'opus' })",
+    # agentType bound to a const string
+    META + "const V = 'hardmode:verifier'\nreturn await agent('x', { model: 'opus', agentType: V })",
+    # a dynamic phase title gets its own progress group at runtime — not checkable, not a defect
+    META + "for (const n of [1, 2]) { phase(`Round ${n}`); await agent('x', { model: 'opus', phase: `Round ${n}` }) }\nreturn 1",
 ])
 def test_legitimate_scripts_pass(tmp_path, src):
     code, out = lint(tmp_path, src)

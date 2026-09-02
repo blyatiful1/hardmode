@@ -47,8 +47,8 @@ def main():
                                text=True, timeout=20)
         except Exception:
             return 0
-    if p.returncode == 0:
-        return 0
+    if p.returncode != 1:
+        return 0      # 0 = clean; 2 = the linter itself crashed — never blame the script
     findings = "\n".join(ln for ln in (p.stderr + p.stdout).splitlines() if ln.strip())[:2000]
     print("WORKFLOW LINT (automated): this script breaks the kit's workflow rules and was not "
           "run. Fix and resubmit:\n" + findings, file=sys.stderr)

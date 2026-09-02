@@ -62,10 +62,18 @@ def scope_slug(data):
     return f"{s}-{slug(agent, 32)}" if agent else s
 
 
+# Per-session scratch files the TTL sweep may remove. sessions.jsonl (the denominator
+# every stat depends on) and harness-fp.txt (the floor check's memory) are NOT
+# per-session and must survive a week of idleness.
+PRUNABLE_PREFIXES = ("ledger-", "loop-alarm-", "claim-gate-", "original-task-", "compact-")
+
+
 def prune_stale(d, ttl_days=STATE_TTL_DAYS):
     cutoff = time.time() - ttl_days * 86400
     try:
         for name in os.listdir(d):
+            if not name.startswith(PRUNABLE_PREFIXES):
+                continue
             p = os.path.join(d, name)
             try:
                 if os.path.isfile(p) and os.path.getmtime(p) < cutoff:
@@ -214,7 +222,7 @@ def blank_quotes(s):
 # inside an awk/grep argument is not a redirect.
 SHELL_WRITE = re.compile(
     r"(?<![0-9&<])>>?\s*(?!&|/dev/(?:null|stdout|stderr)\b)\S"
-    r"|(?:^|[|&;]\s*)(?:sudo\s+)?(?:"
+    r"|(?:^|[|&;\n]\s*)(?:[A-Za-z_]\w*=\S*\s+)*(?:sudo\s+|env\s+|time\s+)?(?:"
     r"sed\s+(?:-\S+\s+)*-i|perl\s+(?:-\S+\s+)*-p?i|tee\s|patch\s|truncate\s|touch\s"
     r"|(?:git\s+(?:apply|mv|rm|checkout|restore|stash|reset|clean|merge|rebase|revert|cherry-pick|pull|am)\b)"
     r"|mv\s|cp\s|rm\s|rmdir\s|mkdir\s|ln\s|install\s|shred\s|dd\s"
@@ -226,11 +234,13 @@ SHELL_WRITE = re.compile(
     r")"
 )
 
-# A recognised check/test runner. Used by the claim gate (did a check run after the last
-# edit, and did it pass?) and the commit preflight (has the check gone green since the
-# last edit?). Matched against the quote-blanked, whitespace-collapsed command.
+# A recognised check/test runner AT COMMAND POSITION (start of a segment, after env
+# assignments / sudo / a runner wrapper). `cat pytest.ini` names a tool but runs no
+# check — a filename argument must never count as a passing run. Used by the claim
+# gate and the commit preflight. Matched against the quote-blanked command; newlines
+# are segment separators, so multi-line commands are judged line by line.
 TEST_RUNNER = re.compile(
-    r"(?:^|[|&;]\s*|\s)(?:"
+    r"(?:^|[|&;\n]\s*)(?:[A-Za-z_]\w*=\S*\s+)*(?:sudo\s+|env\s+|time\s+|uv\s+run\s+|poetry\s+run\s+|pipenv\s+run\s+)?(?:"
     r"(?:python3?|py)\s+-m\s+(?:pytest|unittest|tox|nox|ruff|mypy|pyright)\b"
     r"|(?:\S*/)?(?:pytest|py\.test|tox|nox|ruff|mypy|pyright|flake8|pylint|bandit)\b"
     r"|(?:npm|pnpm|yarn|bun)\s+(?:run\s+)?(?:test|check|lint|typecheck|type-check|build|ci|verify)\b"
@@ -252,9 +262,35 @@ FAILURE_OUTPUT = re.compile(
 )
 
 
+def normalize_cmd(cmd):
+    """Join line continuations and collapse HORIZONTAL whitespace; real newlines survive
+    as command separators (collapsing them let a verb on line 2 escape every anchor)."""
+    if not isinstance(cmd, str):
+        return ""
+    cmd = re.sub(r"\\\r?\n", " ", cmd).replace("\r\n", "\n").replace("\r", "\n")
+    return re.sub(r"[^\S\n]+", " ", cmd).strip()
+
+
 def looks_like_test_run(cmd):
-    return bool(TEST_RUNNER.search(blank_quotes(cmd))) if isinstance(cmd, str) else False
+    return bool(TEST_RUNNER.search(blank_quotes(normalize_cmd(cmd))))
 
 
 def looks_like_write(cmd):
-    return bool(SHELL_WRITE.search(blank_quotes(cmd))) if isinstance(cmd, str) else False
+    return bool(SHELL_WRITE.search(blank_quotes(normalize_cmd(cmd))))
+
+
+def response_text(tool_response):
+    """Best-effort text of a PostToolUse tool_response (stdout/stderr/content), for
+    output-based failure detection (`pytest || true` exits 0 and still says '3 failed')."""
+    if isinstance(tool_response, str):
+        return tool_response
+    if isinstance(tool_response, dict):
+        parts = []
+        for k in ("stdout", "stderr", "content", "output", "text", "error"):
+            v = tool_response.get(k)
+            if isinstance(v, str):
+                parts.append(v)
+            elif isinstance(v, list):
+                parts.extend(b.get("text", "") for b in v if isinstance(b, dict))
+        return "\n".join(parts)
+    return ""

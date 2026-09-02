@@ -40,9 +40,10 @@ the `verifier`, `plan-critic`, `oracle` and `scout` agents is **independence**:
 - **no ability to modify the tree** — `tools: Read, Bash, Grep, Glob` is only an
   availability list and Bash writes freely, so a PreToolUse hook denies tree writes for
   these agent types (the harness puts `agent_type` in every subagent tool payload),
-- **a machine-checked output contract** — a SubagentStop hook sends back a verdict that
-  lacks its VERDICT/EVIDENCE/GAPS shape, or a CONFIRMED verdict from an agent that ran
-  no command at all.
+- **a machine-checked output contract** for the three verdict-shaped agents (`verifier`,
+  `plan-critic`, `oracle`; `scout` is free-form) — a SubagentStop hook sends back a
+  verdict that lacks its VERDICT/EVIDENCE/GAPS shape, or a CONFIRMED verdict from an
+  agent that ran no command at all.
 
 They are pinned to a model independent of the driver (opus/sonnet), never inheriting it.
 If a subtask is genuinely too hard for that tier, the main loop does it inline.

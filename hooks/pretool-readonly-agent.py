@@ -18,7 +18,8 @@ npm ci/install) — they do not touch the tree. Denied: redirects into the tree,
 in-place editors, mv/cp/rm/touch/mkdir of tree paths, tree-mutating git verbs
 (commit, add, checkout, restore, reset, clean, rebase, merge, push, stash, apply,
 rm, mv, cherry-pick, revert, am), dependency additions (npm install <pkg>, cargo
-add, yarn/pnpm add), and formatters/fixers.
+add, yarn/pnpm add), and formatters/fixers. Multi-line commands are judged line by
+line; quoted paths are read as the paths they are.
 
 Add agent types with HARDMODE_READONLY_AGENTS=a,b (bare or plugin-namespaced names
 both match). Fails open on anything unexpected; every denial is in the ledger.
@@ -30,23 +31,38 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _hardmode import blank_quotes, ledger, reconfigure_utf8  # noqa: E402
+from _hardmode import blank_quotes, ledger, normalize_cmd, reconfigure_utf8  # noqa: E402
 
 DEFAULT_AGENTS = {"verifier", "plan-critic", "oracle", "scout"}
 EDITING_TOOLS = {"Edit", "Write", "NotebookEdit", "MultiEdit"}
+QUOTE_MARK, SPACE_MARK = "\x01", "\x02"
 
-_REDIRECT = re.compile(r"(?<![0-9&<])>>?\s*(\S+)")
+_REDIRECT = re.compile(r"(?<![0-9&<])>>?")
+_TARGET = re.compile(r"\s*(\S+)")
 _WRITE_VERB = re.compile(
-    r"(?:^|[|&;]\s*)(?:sudo\s+)?(?:"
+    r"(?:^|[|&;\n]\s*)(?:[A-Za-z_]\w*=\S*\s+)*(?:sudo\s+)?(?:"
     r"(?P<inplace>sed\s+(?:-\S+\s+)*-i|perl\s+(?:-\S+\s+)*-p?i)"
-    r"|(?P<fileop>tee|patch|truncate|touch|mv|cp|rm|rmdir|mkdir|ln|install|shred|dd|chmod|chown)\s+(?P<args>[^|&;]*)"
+    r"|(?P<fileop>tee|patch|truncate|touch|mv|cp|rm|rmdir|mkdir|ln|install|shred|dd|chmod|chown)\s(?P<args>[^|&;\n]*)"
     r"|(?P<git>git\s+(?:-C\s+\S+\s+)?(?:commit|add|checkout|restore|switch|reset|clean|rebase|merge|push|apply|rm|mv|cherry-pick|revert|am"
     r"|stash(?!\s+(?:list|show)\b)|worktree\s+(?:add|remove|prune|move)|submodule\s+(?:add|update|deinit)"
-    r"|tag\s+(?!-l\b|--list\b)[^-\s]|tag\s+-[adf]\b|branch\s+(?:-[dDmMc]\b|--delete|--move|--copy))\b)"
+    r"|tag\s+(?!-l\b|--list\b|-n\b|--contains\b|--points-at\b|--(?:no-)?merged\b|--sort\b)[^-\s]\S*|tag\s+-[adfF]\w*\b|branch\s+(?:-[dDmMc]\b|--delete|--move|--copy))\b)"
     r"|(?P<fmt>(?:black|isort|autopep8|yapf|prettier|gofmt|goimports|rustfmt|clang-format|shfmt)\s|ruff\s+format|ruff\s+check\s.*--fix|eslint\s.*--fix|cargo\s+fmt|npm\s+run\s+(?:format|fmt|fix))"
     r"|(?P<deps>npm\s+(?:install|i|add|uninstall|update)\s+[^-\s]|yarn\s+(?:add|remove)\b|pnpm\s+(?:add|remove)\b|cargo\s+(?:add|remove)\b)"
     r"|(?P<find>find\s.*\s-(?:delete|exec\s+(?:rm|mv|cp|sed)\b))|(?P<xargs>xargs\s+(?:-\S+\s+)*(?:rm|mv|cp|sed)\b)"
     r")")
+_QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
+
+
+def token_view(cmd):
+    """Length-preserving view in which a quoted span stays ONE token: the quote chars
+    become QUOTE_MARK and inner whitespace becomes SPACE_MARK. Tokens read back with
+    `untoken()`. Offsets line up with blank_quotes(cmd), so a verb found on the blanked
+    view can read its arguments here."""
+    return _QUOTED.sub(lambda m: QUOTE_MARK + re.sub(r"\s", SPACE_MARK, m.group()[1:-1]) + QUOTE_MARK, cmd)
+
+
+def untoken(t):
+    return t.replace(QUOTE_MARK, "").replace(SPACE_MARK, " ")
 
 
 def readonly_agents():
@@ -70,7 +86,7 @@ def scratch_roots(data):
 
 
 def under_scratch(path, roots, cwd):
-    p = path.strip("'\"`")
+    p = untoken(path).strip("'\"`")
     if p.startswith("&"):
         return True                      # `>&2` — a descriptor, not a file
     p = os.path.expanduser(p)
@@ -83,17 +99,22 @@ def under_scratch(path, roots, cwd):
 def offending(cmd, data):
     """The reason this command would modify the tree, or None."""
     qb = blank_quotes(cmd)
+    tv = token_view(cmd)
     roots = scratch_roots(data)
     cwd = data.get("cwd") or ""
-    for target in _REDIRECT.findall(qb):
-        if not under_scratch(target, roots, cwd):
-            return f"redirect into the working tree ({target})"
+    for m in _REDIRECT.finditer(qb):          # a `>` inside quotes (awk '$3 > 100') is text
+        t = _TARGET.match(tv, m.end())
+        if not t:
+            continue
+        if not under_scratch(t.group(1), roots, cwd):
+            return "redirect into the working tree"
     for m in _WRITE_VERB.finditer(qb):
         if m.group("inplace"):
             return "in-place edit"
         if m.group("fileop"):
             verb = m.group("fileop")
-            args = [a for a in m.group("args").split() if not a.startswith("-")]
+            raw_args = tv[m.start("args"):m.end("args")]
+            args = [untoken(a) for a in raw_args.split() if not a.startswith("-")]
             if verb == "dd":
                 args = [a[3:] for a in args if a.startswith("of=")] or ["(no of=)"]
             elif verb in ("cp", "mv", "ln", "install"):
@@ -124,7 +145,7 @@ def deny(data, agent, why):
         "change, report COULD NOT VERIFY: <what> — <why> instead of making it.",
         file=sys.stderr,
     )
-    ledger(data, "readonly-agent", "deny", f"{agent}:{why[:60]}")
+    ledger(data, "readonly-agent", "deny", f"{agent}:{why}")
     return 2
 
 
@@ -143,8 +164,7 @@ def main():
     cmd = tool_input.get("command", "") if isinstance(tool_input, dict) else ""
     if not isinstance(cmd, str) or not cmd.strip():
         return 0
-    flat = re.sub(r"\s+", " ", cmd.replace("\\\n", " "))
-    why = offending(flat, data)
+    why = offending(normalize_cmd(cmd), data)
     if why:
         return deny(data, agent, why)
     return 0

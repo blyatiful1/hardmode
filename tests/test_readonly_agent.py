@@ -79,3 +79,31 @@ def test_denials_are_ledgered_and_malformed_input_fails_open(tmp_path):
     assert any(r["hook"] == "readonly-agent" and r["outcome"] == "deny" for r in recs)
     r = subprocess.run([sys.executable, str(HOOK)], input="not json", capture_output=True, text=True, timeout=30)
     assert r.returncode == 0
+
+
+def test_multi_line_commands_are_judged_after_a_newline(tmp_path):
+    for cmd in ("ls\nrm -rf src", "git status\ngit add -A", "set -e\nsed -i 's/a/b/' x.py", "true\n\necho x > a.py"):
+        assert run_hook(tmp_path, cmd).returncode == 2, cmd
+    assert run_hook(tmp_path, "ls\ngit status\necho 'rm -rf src'").returncode == 0
+
+
+def test_quoted_paths_are_one_token(tmp_path):
+    scratch = tmp_path / "scratch"
+    assert run_hook(tmp_path, f'echo x > "{scratch}/my file.txt"').returncode == 0
+    assert run_hook(tmp_path, f"echo x > '{scratch}/my file.txt'").returncode == 0
+    assert run_hook(tmp_path, 'echo x > "/home/user/proj/my file.txt"').returncode == 2
+    assert run_hook(tmp_path, f'cp "src/a b.py" "{scratch}/copy.py"').returncode == 0
+    assert run_hook(tmp_path, f'cp "{scratch}/copy.py" "src/a b.py"').returncode == 2
+    assert run_hook(tmp_path, "awk '$3 > 100 {print}' log.txt | sort").returncode == 0
+    assert run_hook(tmp_path, 'grep ">" file.txt').returncode == 0
+
+
+def test_file_ops_judge_the_destination_only(tmp_path):
+    scratch = tmp_path / "scratch"
+    for cmd in (f"cp src/a.py {scratch}/a.py", f"mv {scratch}/a {scratch}/b", f"dd if=/dev/zero of={scratch}/img bs=1M count=1",
+                f"install -m 644 src/a.py {scratch}/", f"ln -s src/a.py {scratch}/link", f"mkdir -p {scratch}/sub",
+                f"touch {scratch}/marker", "git worktree list", "git tag -l", "git stash show -p"):
+        assert run_hook(tmp_path, cmd).returncode == 0, cmd
+    for cmd in (f"cp {scratch}/a.py src/a.py", "dd if=/dev/zero of=./img", f"mv {scratch}/a ./a", "ln -s x ./link",
+                "git tag v1", "git tag -d v1", "git worktree add ../wt", "git stash pop"):
+        assert run_hook(tmp_path, cmd).returncode == 2, cmd

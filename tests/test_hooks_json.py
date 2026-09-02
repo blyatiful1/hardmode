@@ -81,7 +81,7 @@ def test_load_bearing_matchers_are_pinned():
     for event, matcher, h in wired(load_wiring()):
         by.setdefault((event, hook_name(h["command"])), set()).add(matcher)
     assert by[("SessionStart", "sessionstart-compact-recovery.py")] == {"compact"}
-    assert by[("SessionStart", "sessionstart-floor-check.py")] == {"startup|resume|clear"}
+    assert by[("SessionStart", "sessionstart-floor-check.py")] == {"startup|resume|clear|fork"}
     assert by[("PreToolUse", "pretool-destructive-guard.py")] == {"Bash"}
     assert by[("PreToolUse", "pretool-commit-preflight.py")] == {"Bash"}
     assert by[("PreToolUse", "pretool-readonly-agent.py")] == {"Bash|Edit|Write|NotebookEdit"}

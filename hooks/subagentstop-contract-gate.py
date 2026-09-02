@@ -73,13 +73,21 @@ def ran_a_command(path):
     return False
 
 
+def normalize(text):
+    """Markdown emphasis and case are not violations: `**VERDICT:** Confirmed` is the
+    verdict the contract asks for. Strip *, _ and backticks; compare case-insensitively."""
+    return re.sub(r"[*_`]+", "", text)
+
+
 def problems(base, text, transcript):
     c = CONTRACTS[base]
-    out = [f"missing {m}" for m in c["markers"] if m not in text]
+    text = normalize(text)
+    out = [f"missing {m}" for m in c["markers"] if not re.search(r"(?im)^\s*" + re.escape(m), text)
+           and m not in text]
     name, pat = c["enum"]
-    if name + ":" in text and not re.search(pat, text):
+    if name + ":" in text and not re.search(pat, text, re.IGNORECASE):
         out.append(f"{name}: must be one of the listed values")
-    if base == "verifier" and re.search(r"VERDICT:\s*CONFIRMED\b", text) and transcript \
+    if base == "verifier" and re.search(r"VERDICT:\s*CONFIRMED\b", text, re.IGNORECASE) and transcript \
             and os.path.isfile(transcript) and not ran_a_command(transcript):
         out.append("VERDICT: CONFIRMED with NO command run in your own context — that is "
                    "re-reasoning, not verification; run the check that would fail if the "

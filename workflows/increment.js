@@ -125,6 +125,8 @@ return {
   completed,
   halted,                 // null when every slice verified; otherwise WHY the run stopped
   results,
-  // Honesty: a halted run left later slices unbuilt; the tree holds the verified prefix.
-  notBuilt: slices.slice(completed + (halted && results.length > completed ? 1 : 0)).map(s => s.title),
+  // Honesty: a halted run left later slices unbuilt; the tree holds the verified prefix
+  // plus, when a verifier rejected it, one attempted-but-unverified slice.
+  attemptedUnverified: results.filter(r => r.verdict && r.verdict.verdict !== 'pass').map(r => r.slice),
+  notBuilt: slices.slice(results.filter(r => r.verdict).length).map(s => s.title),
 }

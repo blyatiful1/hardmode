@@ -8,7 +8,7 @@ with dumping hooks — and found that the JS bundle on the box was a stale 2.1.4
 of seventeen orchestrator hypotheses were confirmed or partially confirmed, 30 fresh
 findings survived adversarial verification, 0 were refuted. Everything below closes a
 confirmed defect or turns an advisory rule into enforcement grounded in a verified
-contract. Suite: 140 → 240 tests, demo 4/4 → 10/10, `claude plugin validate` clean.
+contract. Suite: 140 → 296 tests (every hook as a subprocess, the workflows under a stubbed runtime, the linter, the tools, the docs against the tree), demo 4/4 → 10/10, `claude plugin validate` clean. A second, adversarial review pass over the diff (28 agents across four lenses, every finding refute-verified) produced 54 findings — quoted arguments blanked out of the guard's view, `find | xargs rm` from `/`, `pytest || true` counted as green, a double-counted Edit, prune deleting the cross-session files, the linter's phase check silently passing — all closed before this release.
 
 ### Fixed — the floor had holes
 - **Destructive guard:** `git clean --force`, `git checkout --force`, combined short flags
