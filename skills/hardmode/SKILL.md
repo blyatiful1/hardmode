@@ -19,45 +19,48 @@ never restates doctrine, it executes it.
    task turns out smaller than it looked.
 
 ## Stage 1 — Explore before planning
-Read the load-bearing files yourself; delegate broad sweeps instead of grepping serially
-in your own context. Check auto-memory before re-deriving prior decisions about this
-project.
+Read the load-bearing files yourself; delegate broad sweeps (to `hardmode:scout` or
+Explore agents) instead of grepping serially in your own context. Check auto-memory
+before re-deriving prior decisions about this project.
 
 ## Stage 2 — Plan, then attack the plan
 Write the plan: ordered steps, files touched, and the runnable end-check that will prove
-success. (/deep-plan only when strategy is genuinely open-ended — multiple plausible
-architectures.) Hand the plan + the ORIGINAL request verbatim to `plan-critic`. Fix
-blockers before writing any code. If it says WRONG APPROACH, believe it enough to check.
+success. (/hardmode:deep-plan only when strategy is genuinely open-ended — multiple
+plausible architectures.) Hand the plan + the ORIGINAL request verbatim to
+`hardmode:plan-critic`. Fix blockers before writing any code. If it says WRONG APPROACH,
+believe it enough to check.
 
 ## Stage 3 — Implement in verified increments
 Smallest coherent steps; run the project's canonical check after EACH, not at the end.
-Two failed fixes on the same symptom → stop and hand all evidence to `oracle`; never a
-third blind fix. Website/web-UI deliverable → the ultraweb suite owns the design
-decisions inside these stages.
+When the steps each have a runnable check and the session is orchestration-opted-in,
+/hardmode:increment does exactly this with a fresh-context verifier per slice. Two
+failed fixes on the same symptom → stop and hand all evidence to `hardmode:oracle`;
+never a third blind fix (the loop alarm will deny it anyway).
 
 ## Stage 4 — Verify like you didn't write it
-Single small change → drive it end-to-end yourself with real inputs. Multi-file or
-high-stakes → `verifier` agent (fresh context, tries to REFUTE, subsumes the canonical
-check). One or the other, never both. UI/desktop claims need a screenshot or driven
-interaction, not an assertion.
+Single small change → drive it end-to-end yourself (`/verify`) with real inputs.
+Multi-file or high-stakes → `hardmode:verifier` agent (fresh context, read-only by
+enforcement, tries to REFUTE, subsumes the canonical check, answers
+VERDICT/EVIDENCE/GAPS). One or the other, never both. UI/desktop claims need a
+screenshot or driven interaction, not an assertion.
 
 ## Stage 5 — Review before declaring victory
-Working diff → /code-review at high effort by default; /paranoid-review when the session
-is orchestration-opted-in and the stakes justify a ~20-agent fan-out. Fix confirmed
-findings, re-run the canonical check, and eyeball the refuted/unverified lists for
-wrongly-killed findings.
+Working diff → /code-review at high effort by default; /hardmode:paranoid-review when
+the session is orchestration-opted-in and the stakes justify a ~20-agent fan-out. Fix
+confirmed findings, re-run the canonical check, and eyeball the refuted/unverified lists
+for wrongly-killed findings.
 
 ## Stage 6 — Report and bank the lessons
 Final message: outcome first, every claim backed by a command run this session (terse
 evidence — decisive lines only); anything unproven is labeled "unverified". Re-read the
 original request one last time against the task list: every deliverable shipped?
-Non-obvious lessons → postmortem skill — and register memdb keywords, or the banked
-memory is invisible to recall.
+Non-obvious lessons → postmortem skill (its `memcheck --where` / `--dupes` steps keep
+the corpus findable and deduplicated).
 
 ## Orchestration and cost
 Workflow-tool stages run ONLY under the opt-in rule (the orchestrate skill owns it);
 invoking this skill does not by itself authorize Workflow runs. Without the opt-in, run
 the same stage with Agent-tool subagents — degrade the machinery, never the rigor.
-Every workflow agent() call pins `model: 'opus'` or `'sonnet'`. This protocol multiplies
-agent spend on purpose — say what it cost when you're done (agents spawned, roughly what
-they did).
+Every workflow agent() call pins `model: 'opus'` or `'sonnet'` and names kit agents by
+plugin id (`hardmode:verifier`, `hardmode:scout`). This protocol multiplies agent spend
+on purpose — say what it cost when you're done (agents spawned, roughly what they did).

@@ -8,48 +8,93 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
 
       - name: Shell scripts parse
         run: bash -n bench/task/verify.sh
 
       - name: Python components compile
-        run: python3 -m py_compile hooks/*.py bench/score.py bench/task/loglib/*.py
+        run: python3 -m py_compile hooks/*.py tools/*.py bench/score.py bench/task/loglib/*.py
 
-      - name: Plugin manifest and hook wiring are valid JSON
+      - name: Lint (ruff)
+        run: |
+          python3 -m pip -q install ruff
+          python3 -m ruff check hooks tools tests bench/score.py bench/acceptance
+
+      - name: Manifests and hook wiring are valid JSON
         run: |
           python3 - <<'EOF'
           import json
-          json.load(open(".claude-plugin/plugin.json"))
-          json.load(open("hooks/hooks.json"))
-          json.load(open("doctrine/settings-snippet.json"))
-          print("plugin json ok")
+          for p in (".claude-plugin/plugin.json", ".claude-plugin/marketplace.json", "hooks/hooks.json",
+                    "doctrine/settings-snippet.json"):
+              json.load(open(p, encoding="utf-8"))
+          print("json ok")
           EOF
 
-      - name: Workflow scripts compile
+      - name: Workflow scripts lint
         run: node tools/check-workflows.mjs
 
-      - name: Agents and skills have frontmatter
+      - name: Agents, skills and commands have frontmatter (block-scoped)
         run: |
           python3 - <<'EOF'
-          import sys
+          import re, sys
           from pathlib import Path
+          FM = re.compile(r"\A---\r?\n(.*?)\r?\n---\r?\n", re.S)
           bad = []
-          for f in [*Path('agents').glob('*.md'), *Path('skills').glob('*/SKILL.md')]:
-              text = f.read_text()
-              if not text.startswith('---') or 'name:' not in text or 'description:' not in text:
-                  bad.append(str(f))
+          for f in [*Path('agents').glob('*.md'), *Path('skills').glob('*/SKILL.md'), *Path('commands').glob('*.md')]:
+              m = FM.match(f.read_text(encoding='utf-8'))
+              if not m:
+                  bad.append(f"{f}: no frontmatter block"); continue
+              keys = {ln.split(':', 1)[0].strip() for ln in m.group(1).splitlines() if ':' in ln and not ln[:1].isspace()}
+              need = {'description'} | ({'name'} if 'commands' not in f.parts else set())
+              missing = need - keys
+              if missing:
+                  bad.append(f"{f}: frontmatter missing {sorted(missing)}")
           if bad:
-              sys.exit(f"missing/incomplete frontmatter: {bad}")
+              sys.exit("frontmatter errors:\n  " + "\n  ".join(bad))
           print('frontmatter ok')
           EOF
 
-      - name: Unit tests (hook + bench guards)
+      - name: Unit tests
         run: |
           python3 -m pip -q install pytest
-          python3 -m pytest tests/ -q
+          python3 -m pytest -q
 
       - name: Hook demo self-test
         run: python3 tools/demo.py
+
+      - name: Doctor (strict, against a scratch config dir)
+        run: |
+          export CLAUDE_CONFIG_DIR=$(mktemp -d)
+          python3 tools/doctor.py --strict --demo
+
+      - name: Claude Code plugin validate + install smoke
+        run: |
+          npm i -g @anthropic-ai/claude-code
+          claude --version
+          export CLAUDE_CONFIG_DIR=$(mktemp -d)
+          set -o pipefail
+          fail=0
+          for target in .claude-plugin/plugin.json .claude-plugin/marketplace.json agents skills commands; do
+            out=$(claude plugin validate "$target" 2>&1) || fail=1
+            printf '%s\n' "$out"
+            # the exit code is 0 on warnings; a warning about OUR files is a defect
+            if printf '%s' "$out" | grep -qiE 'warning|error'; then echo "validator reported findings for $target"; fail=1; fi
+          done
+          test "$fail" = 0
+          claude plugin marketplace add "$PWD"
+          claude plugin install hardmode@hardmode
+          python3 - <<'EOF'
+          import json, os, sys
+          cfg = os.environ["CLAUDE_CONFIG_DIR"]
+          reg = json.load(open(os.path.join(cfg, "plugins", "installed_plugins.json")))
+          entries = [k for k in reg.get("plugins", {}) if k.startswith("hardmode@")]
+          if not entries:
+              sys.exit("install smoke: hardmode not registered")
+          print("install smoke ok:", entries, reg["plugins"][entries[0]][0].get("version"))
+          EOF
 
       - name: Bench anchor — pristine task scores 1/15
         run: |

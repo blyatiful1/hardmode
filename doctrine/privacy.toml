@@ -1,21 +1,38 @@
-# hardmode memory privacy patterns  (installed to ~/.claude/memory/privacy.toml if absent)
+# hardmode memory privacy patterns
 #
-# WHY: the promotion boundary is project -> global memory. A "work marker" is any
-# token that must never cross into the machine-wide global corpus (`~/.claude/memory/`)
-# — internal ticket ids, private hostnames, client/codenames. Two consumers read this:
-#   * pretool-mem-privacy-guard.py  — BLOCKS a write into $BASE/memory/ whose pending
-#                                     content matches any pattern (deterministic gate).
-#   * `mem.py doctor --privacy`      — detective sweep over the whole global corpus.
+# WHY: memory is written once and read by every future session. Two things must
+# never land there: SECRETS (keys, tokens) and WORK MARKERS that must not cross from a
+# project into the machine-wide corpus (internal ticket ids, private hostnames, client
+# codenames). The pretool-mem-privacy-guard hook BLOCKS a Write/Edit into a memory
+# corpus whose pending content matches any pattern below.
 #
-# PATTERN SYNTAX: each entry is a work-marker glob. `*` matches a run of non-space
-# characters; everything else is a literal substring, matched anywhere in the file.
-#   "ACME-*"               -> matches ACME-1234, ACME-TICKET, ...
-#   "internal.example.com" -> matches that hostname verbatim
+# WHICH FILE IS READ: <config dir>/memory/privacy.toml if it exists (your own list —
+# `python3 tools/doctor.py --init-privacy` copies this one there), else this shipped
+# file. The first readable non-empty list wins; they are not merged.
 #
-# This list is CONSERVATIVE by design (necessary, not sufficient): it ships EMPTY so a
-# fresh install never false-positives. Uncomment/extend with YOUR real markers.
+# PATTERN SYNTAX: `*` matches a run of non-space characters; everything else is a
+# literal substring, matched anywhere in the pending text (case-sensitive).
+#   "ACME-*"               -> ACME-1234, ACME-TICKET, ...
+#   "internal.example.com" -> that hostname verbatim
+#
+# The shipped defaults are SECRET-SHAPED: private-key headers and the well-known
+# API-token prefixes. They essentially never false-positive on prose, so a fresh
+# install is armed. Add YOUR work markers below them.
 
 patterns = [
+  # secrets (shipped defaults)
+  "PRIVATE KEY-----",
+  "AKIA*",
+  "ghp_*",
+  "github_pat_*",
+  "gho_*",
+  "sk-ant-*",
+  "sk-proj-*",
+  "xoxb-*",
+  "xoxp-*",
+  "AIza*",
+  "-----BEGIN OPENSSH",
+  # your work markers (examples — uncomment/extend)
   # "ACME-*",
   # "internal.example.com",
   # "PROJECT-CODENAME",

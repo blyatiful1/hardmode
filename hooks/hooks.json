@@ -1,18 +1,6 @@
 {
-  "description": "Hardmode deterministic floor: claim-audit gate, destructive guard, loop alarm, compaction save/recover, memory privacy guard",
+  "description": "Hardmode deterministic floor: claim-audit gate (evidence-based), destructive guard, read-only verification agents, loop alarm (shell + edit grind), agent output contracts, compaction save/recover, memory privacy guard, commit preflight, workflow pre-flight lint, floor self-check and firing ledger",
   "hooks": {
-    "PreCompact": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-save-task.py\"",
-            "timeout": 10,
-            "statusMessage": "Saving original request verbatim before compaction..."
-          }
-        ]
-      }
-    ],
     "SessionStart": [
       {
         "matcher": "compact",
@@ -24,15 +12,63 @@
             "statusMessage": "Injecting compaction recovery: protocol + original request + git state..."
           }
         ]
+      },
+      {
+        "matcher": "startup|resume|clear|fork",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/sessionstart-floor-check.py\"",
+            "timeout": 60,
+            "statusMessage": "hardmode floor check..."
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/precompact-save-task.py\"",
+            "timeout": 10,
+            "statusMessage": "Saving original request, later turns and git state before compaction..."
+          }
+        ]
       }
     ],
     "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pretool-readonly-agent.py\"",
+            "timeout": 10
+          }
+        ]
+      },
       {
         "matcher": "Bash",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pretool-destructive-guard.py\"",
+            "timeout": 10
+          },
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pretool-commit-preflight.py\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Edit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/posttool-loop-alarm.py\"",
             "timeout": 10
           }
         ]
@@ -44,6 +80,17 @@
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pretool-mem-privacy-guard.py\"",
             "timeout": 10
+          }
+        ]
+      },
+      {
+        "matcher": "Workflow",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/pretool-workflow-lint.py\"",
+            "timeout": 30,
+            "statusMessage": "Linting workflow script..."
           }
         ]
       }
@@ -62,12 +109,25 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Edit|Write|NotebookEdit",
         "hooks": [
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/posttool-loop-alarm.py\"",
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "matcher": "hardmode:verifier|hardmode:plan-critic|hardmode:oracle|verifier|plan-critic|oracle",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/subagentstop-contract-gate.py\"",
+            "timeout": 10,
+            "statusMessage": "Checking agent output contract..."
           }
         ]
       }
@@ -78,8 +138,19 @@
           {
             "type": "command",
             "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-claim-audit.py\"",
-            "timeout": 15,
-            "statusMessage": "Claim-audit gate..."
+            "timeout": 20,
+            "statusMessage": "Claim-audit gate (evidence check)..."
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/sessionend-ledger-summary.py\"",
+            "timeout": 3
           }
         ]
       }

@@ -5,7 +5,6 @@ import subprocess
 import sys
 from datetime import datetime
 
-import pytest
 
 INSTANCE = os.environ["INSTANCE"]
 sys.path.insert(0, INSTANCE)

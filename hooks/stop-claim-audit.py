@@ -1,92 +1,100 @@
 #!/usr/bin/env python3
-"""Stop-hook claim-audit gate (hardmode).
+"""Stop-hook claim-audit gate (hardmode) — evidence-based.
 
-Blocks the FIRST stop of a session iff (a) the final assistant message makes a
-completion claim and (b) the session modified files — then forces one audit pass.
-Deterministic backstop for the documented Opus failure mode of declaring work
-done without having run the check that actually covers the request.
+Blocks a stop (exit 2 + stderr) iff the final assistant message makes a completion
+claim, the CURRENT TURN modified files, and the transcript holds no evidence that a
+recognised check ran AND passed AFTER the last modification. It names the missing
+evidence — the check that failed, the edit that came after the last green run, or
+the absence of any check — instead of nagging once on every claim.
 
-Uses the exit-2 + stderr blocking protocol: the JSON {"decision":"block"} protocol
-is silently fatal in `claude -p` print mode (verified empirically on 2.1.198).
+Evidence comes from the transcript itself (verified against Claude Code 2.1.258):
+  * assistant `tool_use` blocks carry id + name + input; the following user entry's
+    `tool_result` block carries tool_use_id + is_error, so every Edit/Write/Bash call
+    has a known outcome — a failed or denied edit is not a modification, and a
+    failing check is a failing check even when the model's summary says otherwise;
+  * work delegated to subagents (Agent/Task/Workflow) lives in separate transcripts
+    under <transcript stem>/subagents/**; they are scanned too, so "done" after
+    delegated edits is audited exactly like direct edits;
+  * the current turn starts at the last genuine user prompt (not isMeta, not a
+    compaction summary), so a read-only follow-up question after audited work is
+    never taxed;
+  * `last_assistant_message` is sent by this build; the fallback reconstructs the
+    last assistant MESSAGE from its `message.id` (one transcript entry per block).
+
+Termination: the harness re-enters with stop_hook_active=true after a block. The
+gate blocks again only when the evidence fingerprint changed (a new check ran and
+failed, a new edit landed) and at most MAX_BLOCKS times per turn — never forever.
+Uses the exit-2 + stderr blocking protocol. Fails open on anything unexpected.
 """
+import hashlib
 import json
+import os
 import re
 import sys
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from _hardmode import (FAILURE_OUTPUT, iter_jsonl, ledger, looks_like_test_run,  # noqa: E402
+                       looks_like_write, read_json, reconfigure_utf8, session_slug,
+                       state_dir, subagent_transcripts, write_json_atomic)
 
 CLAIM = re.compile(
     r"\b(done|complete|completed|finished|verified|fixed|resolved|implemented"
     r"|all (?:tests?|checks?|parts?) (?:pass|passing|green)"
     r"|tests? (?:are )?(?:pass|passing|green)"
-    # German completion claims — this user works in German, and an English-only gate
-    # is silently inert on half their completions (a false pass = a shipped bug).
+    r"|(?:suite|build|ci|pipeline|lint(?:er)?|type ?check(?:er)?)\s+(?:is\s+|are\s+)?(?:green|passing|clean)"
+    r"|all green|works now|no failures|ready to (?:merge|ship)|checks out"
+    r"|fix(?:es)? (?:is|are) (?:applied|in place)"
+    # German completion claims — an English-only gate is silently inert on half of a
+    # German-speaking operator's completions (a false pass = a shipped bug).
     r"|fertig|erledigt|behoben|gel(?:ö|oe)st|implementiert|abgeschlossen|umgesetzt"
+    r"|gefixt|gefixed|korrigiert|fertiggestellt"
+    r"|funktioniert (?:jetzt|wieder)|l(?:ä|ae)uft (?:jetzt|wieder|durch)"
     r"|alle\s+tests?\s+(?:laufen|bestehen|sind\s+gr(?:ü|ue)n|gr(?:ü|ue)n)"
-    r"|tests?\s+laufen\s+(?:gr(?:ü|ue)n|durch))\b",
+    r"|tests?\s+laufen\s+(?:\w+\s+){0,2}(?:gr(?:ü|ue)n|durch))\b",
     re.IGNORECASE,
 )
-# Strip clearly-negated claims and clear non-claim uses of a claim word before
-# matching, so honest in-progress reports and ordinary prose don't trip the gate.
-# Kept conservative: a false block costs one cheap audit pass; a false pass costs
-# a shipped bug.
+# Strip clearly-negated claims and honest partial/failed reports before matching, so
+# in-progress reports don't trip the gate. Conservative: a false block costs one
+# cheap audit pass; a false pass costs a shipped bug.
+_NUM = r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|some|most|half|several|a\s+few|only\s+\d+)"
 NEGATED = re.compile(
     r"\b(?:not|never|isn'?t|aren'?t|wasn'?t|haven'?t|hasn'?t|can'?t be|cannot be"
     r"|(?:needs?|remains?|still|yet) to be)"
     r"\s+(?:yet\s+|been\s+|fully\s+|actually\s+)*"
     r"(?:done|completed?|finished|verified|fixed|resolved|implemented)\b"
-    # The suite-claim forms need their own negations: "not all tests pass yet" /
-    # "no checks are green" would otherwise still contain the positive CLAIM
-    # substring ("all tests pass" / "checks are green") and false-block an
-    # honest in-progress report.
-    r"|\b(?:not\s+all|no|none\s+of\s+the)\s+(?:tests?|checks?|parts?)"
-    r"\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b"
-    # German negations: "noch nicht fertig", "nicht ganz behoben". Only a SHORT,
-    # explicit intensifier may sit between "nicht" and the claim word — an
-    # arbitrary-word gap would swallow a real claim ("nicht ganz trivial aber fertig").
+    r"|\b(?:unable|failed|couldn'?t|could not|didn'?t|did not|wasn'?t able|not able)"
+    r"\s+(?:to\s+)?(?:fully\s+)?(?:complete|finish|fix|resolve|implement|verify)\w*"
+    r"|\bwithout\s+(?:having\s+)?(?:completed|finished|fixed|verified)\b"
+    r"|\b(?:not\s+all|no|none\s+of\s+the|" + _NUM + r"(?:\s+of\s+(?:the\s+)?\w+)?)"
+    r"\s+(?:tests?|checks?|parts?)\s+(?:are\s+)?(?:pass(?:ing|es)?|green)\b"
     r"|\b(?:noch\s+)?nicht\s+(?:(?:ganz|wirklich|voll|vollst(?:ä|ae)ndig)\s+)?"
-    r"(?:fertig|erledigt|behoben|gel(?:ö|oe)st|implementiert|abgeschlossen|umgesetzt)\b"
-    r"|\bnicht\s+alle\s+tests?\b",
+    r"(?:fertig|erledigt|behoben|gel(?:ö|oe)st|implementiert|abgeschlossen|umgesetzt|gefixt|korrigiert)\b"
+    r"|\bnicht\s+alle\s+tests?\b|\bfunktioniert\s+(?:noch\s+)?nicht\b|\bl(?:ä|ae)uft\s+(?:noch\s+)?nicht\b",
     re.IGNORECASE,
 )
-# NOTE ON DELIBERATE OVER-BLOCKING: the gate keeps its conservative bias — a false
-# block costs one cheap audit pass, a false pass costs a shipped bug. So ordinary prose
-# that reuses a claim word ("the hostname resolved to X", "the complete list below") is
-# accepted as a nuisance block, not "fixed" by a strip that would also let a real
-# "resolved by adding a null check" claim through. German word-order variants the
-# negation can't see ("Fertig ist es noch nicht") likewise over-block on the safe side.
+# NOTE ON DELIBERATE OVER-BLOCKING: ordinary prose that reuses a claim word ("the
+# hostname resolved to X", "the complete list") is accepted as a nuisance block —
+# it costs one check run — rather than "fixed" by a strip that would also let a real
+# "resolved by adding a null check" through.
 MODIFYING_TOOLS = {"Edit", "Write", "NotebookEdit"}
-# Shell commands that plausibly write files: redirections (except to /dev/* and
-# PowerShell's $null), in-place editors, file movers, and the PowerShell writing
-# cmdlets — the Windows snippets wire the shell hooks to `Bash|PowerShell`, so a
-# native-Windows session's primary shell is covered too. Conservative — read-only
-# sessions stay untaxed. NOTE: the loop alarm uses a NARROWER LOOP_RESET (no bare
-# redirects/tee) for its own reset decision; this gate keeps the broad definition
-# because for "did the session modify files" over-inclusion is the safe direction.
-BASH_WRITE = re.compile(
-    r"(?<![0-9&])>>?\s*(?!&|\$null(?=[\s;|&]|$)|/dev/(?:null|stdout|stderr)\b)\S"
-    r"|(?:^|[|&;]\s*)(?:sed\s+(?:-\S+\s+)*-i|tee\s|patch\s|truncate\s"
-    r"|(?:git\s+(?:apply|mv|rm|checkout|restore|stash))|mv\s|cp\s|rm\s"
-    r"|(?i:set-content|add-content|out-file|new-item|move-item|copy-item"
-    r"|remove-item|rename-item)\b)"
-)
+DELEGATING_TOOLS = {"Agent", "Task", "Workflow"}
+MAX_BLOCKS = 3
 
 REASON = (
-    "CLAIM AUDIT GATE (automated, fires once per completion claim): your last message "
-    "declares work done/verified after modifying files. Before finishing: "
-    "(1) Re-read the ORIGINAL request — is EVERY part delivered, not just the parts you "
-    "remember? (2) Every 'done/passing/fixed/verified' claim must be backed by a tool "
-    "result from THIS session. A claim that a test suite passes counts only if the run "
-    "actually collected every test the request scopes — a green run proves only what it "
-    "ran. Run whatever check is missing now, fix what it finds, then finish. If every "
-    "claim is already backed, restate the decisive evidence in one line each and finish."
+    "CLAIM AUDIT GATE (automated): your last message declares the work done/verified, "
+    "but the transcript shows {reason}. Before finishing: (1) run the check that covers "
+    "what you changed and read its result — a green run proves only what it ran; "
+    "(2) re-read the ORIGINAL request: is EVERY part delivered, not just the parts you "
+    "remember? (3) every 'done/passing/fixed/verified' claim must be backed by a tool "
+    "result from THIS session. Fix what the check finds, then finish — or state "
+    "honestly what is not done."
 )
 TEST_EDIT_ADDENDUM = (
-    " ALSO: this session edited test files. Confirm no test was weakened to force a "
-    "pass — a loosened assertion, deleted case, widened tolerance, or added skip is "
-    "not a fix. If a test's expectation was genuinely wrong, your final message must "
-    "say so explicitly and justify the new expectation."
+    " ALSO: this turn edited test files. Confirm no test was weakened to force a pass "
+    "— a loosened assertion, deleted case, widened tolerance, or added skip is not a "
+    "fix. If a test's expectation was genuinely wrong, your final message must say so "
+    "explicitly and justify the new expectation."
 )
-# Paths that look like tests: tests//test dirs, __tests__/, spec/, test_*.py,
-# *_test.<ext>, *.test.<ext>, *.spec.<ext>. Conservative on purpose.
 TEST_PATH = re.compile(
     r"(^|/)(tests?|__tests__|spec)(/|$)"
     r"|(^|/)test_[^/]+$"
@@ -94,28 +102,23 @@ TEST_PATH = re.compile(
     r"|\.(test|spec)\.[A-Za-z0-9]+$",
     re.IGNORECASE,
 )
+_REDIRECT_TARGET = re.compile(r"(?<![0-9&<])>>?\s*(\S+)")
 
 
 def is_test_path(p):
-    """TEST_PATH match with backslash paths normalized to forward slashes, so the
-    directory/pytest heuristics fire on native-Windows file_path values (C:\\r\\tests\\
-    test_x.py) that the Edit/Write tools emit — otherwise the gate's test-edit
-    detection is silently inert on Windows (CONF1)."""
     return bool(TEST_PATH.search(p.replace("\\", "/"))) if isinstance(p, str) else False
 
 
 def makes_claim(text):
-    return bool(CLAIM.search(NEGATED.sub("", text)))
+    return bool(CLAIM.search(NEGATED.sub("", text or "")))
 
 
 def bash_touches_tests(cmd):
-    """True if a file-writing Bash command names a test-looking path anywhere.
-
-    Coarse on purpose: `sed -i ... tests/test_x.py`, `echo ... > foo_test.go`,
-    `mv a.py tests/b.py` all count. Read-only commands never reach here (the
-    caller gates on BASH_WRITE first). A BARE test-dir token (`pytest tests/
-    > out.log`) does not count — only tokens naming something inside one.
-    """
+    """True if a file-WRITING Bash command targets a test-looking path. A check run
+    that merely logs its output (`pytest tests/test_x.py > out.log`) is not a test
+    edit: for recognised runners only redirect targets count."""
+    if looks_like_test_run(cmd):
+        return any(is_test_path(t.strip("'\"`")) for t in _REDIRECT_TARGET.findall(cmd))
     for token in re.split(r"[\s;|&<>()]+", cmd):
         token = token.strip("'\"`").replace("\\", "/")
         if not token or re.fullmatch(r"\.?/?(tests?|__tests__|spec)/?", token, re.IGNORECASE):
@@ -125,59 +128,185 @@ def bash_touches_tests(cmd):
     return False
 
 
-def main():
-    # Payload and transcript are UTF-8 regardless of OS locale; on Windows Python
-    # <=3.14 the cp1252 default would crash on multi-byte content (an emoji in the
-    # transcript) and fail the gate open — silently disabling it (CONF-UTF8).
-    try:
-        sys.stdin.reconfigure(encoding="utf-8", errors="replace")
-        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
-    except Exception:
-        pass
-    data = json.load(sys.stdin)
-    if data.get("stop_hook_active"):
-        return 0  # already continuing because of this hook — let the session end
-    last_text = data.get("last_assistant_message", "")
-    modified = False
-    modified_tests = False
-    with open(data["transcript_path"], encoding="utf-8", errors="replace") as f:
-        for line in f:
-            try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
+def _text_of(content):
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "\n".join(b.get("text", "") for b in content
+                         if isinstance(b, dict) and b.get("type") == "text")
+    return ""
+
+
+def scan_transcript(path, is_sub=False):
+    """Walk one transcript. Returns (events, prompt_timestamps, last_message_text):
+    events are the tool calls in file order with their resolved outcome."""
+    events, pending, prompts, by_id, last_id = [], {}, [], {}, None
+    for entry in iter_jsonl(path):
+        t = entry.get("type")
+        ts = entry.get("timestamp") if isinstance(entry.get("timestamp"), str) else ""
+        msg = entry.get("message") if isinstance(entry.get("message"), dict) else {}
+        content = msg.get("content")
+        if t == "user":
+            genuine = not entry.get("isMeta") and not entry.get("isCompactSummary")
+            if isinstance(content, str):
+                if genuine and content.strip():
+                    prompts.append(ts)
                 continue
-            if not isinstance(entry, dict) or entry.get("type") != "assistant":
-                continue
-            content = entry.get("message", {}).get("content", [])
             if not isinstance(content, list):
                 continue
-            texts = []
-            for block in content:
-                if not isinstance(block, dict):
+            has_text = has_result = False
+            for b in content:
+                if not isinstance(b, dict):
                     continue
-                if block.get("type") == "text":
-                    texts.append(block.get("text", ""))
-                elif block.get("type") == "tool_use":
-                    name = block.get("name")
-                    if name in MODIFYING_TOOLS:
-                        modified = True
-                        inp = block.get("input")
-                        fp = inp.get("file_path", "") if isinstance(inp, dict) else ""
-                        if is_test_path(fp):
-                            modified_tests = True
-                    elif name in ("Bash", "PowerShell"):
-                        inp = block.get("input")
-                        cmd = inp.get("command", "") if isinstance(inp, dict) else ""
-                        if isinstance(cmd, str) and BASH_WRITE.search(cmd):
-                            modified = True
-                            if bash_touches_tests(cmd):
-                                modified_tests = True
-            if texts and not data.get("last_assistant_message"):
-                last_text = "\n".join(texts)  # fallback for CLIs without the payload field
-    if modified and makes_claim(last_text):
-        print(REASON + (TEST_EDIT_ADDENDUM if modified_tests else ""), file=sys.stderr)
-        return 2
-    return 0
+                if b.get("type") == "tool_result":
+                    has_result = True
+                    ev = pending.pop(b.get("tool_use_id"), None)
+                    if ev is not None:
+                        ev["error"] = bool(b.get("is_error"))
+                        ev["output"] = _text_of(b.get("content"))[:6000]
+                elif b.get("type") == "text" and str(b.get("text", "")).strip():
+                    has_text = True
+            if genuine and has_text and not has_result:
+                prompts.append(ts)
+        elif t == "assistant":
+            mid = msg.get("id")
+            if mid:
+                last_id = mid
+            if not isinstance(content, list):
+                continue
+            for b in content:
+                if not isinstance(b, dict):
+                    continue
+                if b.get("type") == "text":
+                    by_id.setdefault(mid, []).append(str(b.get("text", "")))
+                elif b.get("type") == "tool_use":
+                    inp = b.get("input") if isinstance(b.get("input"), dict) else {}
+                    ev = {"ts": ts, "name": b.get("name"), "input": inp, "id": b.get("id"),
+                          "error": None, "output": "", "sub": is_sub}
+                    events.append(ev)
+                    if ev["id"]:
+                        pending[ev["id"]] = ev
+    return events, prompts, "\n".join(by_id.get(last_id, [])) if last_id else ""
+
+
+def classify(ev):
+    """('mod' | 'run' | 'delegate' | None, detail)."""
+    name, inp = ev["name"], ev["input"]
+    if name in MODIFYING_TOOLS:
+        return "mod", str(inp.get("file_path") or inp.get("notebook_path") or "")
+    if name in DELEGATING_TOOLS:
+        return "delegate", ""
+    if name == "Bash":
+        cmd = inp.get("command", "")
+        cmd = cmd if isinstance(cmd, str) else ""
+        if looks_like_test_run(cmd):
+            return "run", cmd
+        if looks_like_write(cmd):
+            return "mod", cmd
+    return None, ""
+
+
+_SUMMARY = re.compile(r"\b[1-9]\d*\s+(?:failed|failing|errors?)\b", re.IGNORECASE)
+
+
+def _decisive_line(output):
+    lines = [ln.strip() for ln in output.splitlines() if ln.strip()]
+    for line in lines:
+        if _SUMMARY.search(line):
+            return line[:160]
+    for line in lines:
+        if FAILURE_OUTPUT.search(line):
+            return line[:160]
+    return lines[-1][:160] if lines else "(no output captured)"
+
+
+def _fp(*parts):
+    return hashlib.sha1("\0".join(str(p) for p in parts).encode("utf-8", "replace")).hexdigest()[:16]
+
+
+def decide(data):
+    """Return (exit_code, message, ledger_outcome, ledger_detail)."""
+    tp = data.get("transcript_path")
+    if not isinstance(tp, str) or not os.path.isfile(tp):
+        return 0, "", "pass", "no-transcript"
+    events, prompts, last_text = scan_transcript(tp)
+    text = data.get("last_assistant_message") or last_text
+    if not makes_claim(text):
+        return 0, "", "pass", "no-claim"
+
+    boundary = prompts[-1] if prompts else ""
+
+    def in_turn(e):
+        return not boundary or not e["ts"] or e["ts"] >= boundary
+
+    turn = [e for e in events if in_turn(e)]
+    delegated = any(e["name"] in DELEGATING_TOOLS for e in turn)
+    sub_files = subagent_transcripts(tp) if delegated else []
+    for f in sub_files:
+        sub_events, _, _ = scan_transcript(f, is_sub=True)
+        turn.extend(e for e in sub_events if in_turn(e))
+    turn.sort(key=lambda e: e["ts"] or "")
+
+    kinds = [(classify(e), e) for e in turn]
+    mods = [e for (k, _), e in kinds if k == "mod" and e["error"] is not True]
+    runs = [e for (k, _), e in kinds if k == "run"]
+    if not mods and not (delegated and not sub_files):
+        return 0, "", "pass", "read-only"
+    modified_tests = any(
+        is_test_path(d) if e["name"] in MODIFYING_TOOLS else bash_touches_tests(d)
+        for (k, d), e in kinds if k == "mod" and e in mods)
+    last_mod_idx = max((turn.index(e) for e in mods), default=-1)
+    after = [r for r in runs if turn.index(r) > last_mod_idx]
+
+    if after:
+        last = after[-1]
+        cmd = last["input"].get("command", "")[:100]
+        if last["error"] or (last["output"] and FAILURE_OUTPUT.search(last["output"])):
+            code = "check-failed"
+            reason = (f"the last check run after your final modification FAILED: `{cmd}` "
+                      f"-> {_decisive_line(last['output'])}")
+        elif modified_tests and not data.get("stop_hook_active"):
+            code = "test-edit"
+            reason = (f"`{cmd}` passed after your last change, but this turn edited test "
+                      "files — the pass must not come from a weakened test")
+        else:
+            return 0, "", "pass", "evidence"
+    elif runs:
+        cmd = runs[-1]["input"].get("command", "")[:100]
+        code = "stale-check"
+        reason = (f"your last modification came AFTER the last check run (`{cmd}`); nothing "
+                  "has been verified since")
+    elif mods:
+        code = "no-check"
+        reason = ("no test/check runner was executed this turn (nothing matching pytest, "
+                  "npm test, cargo test, go test, make check, verify.sh, ...)")
+    else:
+        code = "delegated-unknown"
+        reason = ("work was delegated to subagents whose transcripts could not be read, "
+                  "and no check ran in this turn")
+
+    fp = _fp(code, boundary, mods[-1]["id"] if mods else "", after[-1]["id"] if after else "",
+             len(turn))
+    path = os.path.join(state_dir(), f"claim-gate-{session_slug(data)}.json")
+    state = read_json(path, {})
+    if state.get("turn") != boundary:
+        state = {"turn": boundary, "blocks": 0, "fp": ""}
+    if data.get("stop_hook_active") and (state.get("fp") == fp or state.get("blocks", 0) >= MAX_BLOCKS):
+        return 0, "", "pass", f"budget:{code}"
+    state.update({"fp": fp, "blocks": state.get("blocks", 0) + 1})
+    write_json_atomic(path, state)
+    msg = REASON.format(reason=reason) + (TEST_EDIT_ADDENDUM if modified_tests else "")
+    return 2, msg, "block", code
+
+
+def main():
+    reconfigure_utf8(sys.stdin, sys.stderr)
+    data = json.load(sys.stdin)
+    code, msg, outcome, detail = decide(data)
+    if msg:
+        print(msg, file=sys.stderr)
+    ledger(data, "claim-audit", outcome, detail)
+    return code
 
 
 if __name__ == "__main__":

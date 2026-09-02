@@ -1,4 +1,4 @@
-# Unit tests for the PostToolUse / PostToolUseFailure loop-alarm hook.
+# Unit tests for the loop-alarm hook (PostToolUse / PostToolUseFailure / PreToolUse(Edit)).
 import importlib.util
 import json
 import os
@@ -17,15 +17,24 @@ def _load(name):
     return mod
 
 
+def base_env(state_dir, **extra):
+    env = dict(os.environ, HARDMODE_STATE_DIR=str(state_dir))
+    env.pop("HARDMODE_LOOP_THRESHOLD", None)   # the operator's knob must not leak into tests
+    env.update(extra)
+    return env
+
+
 def run_hook(state_dir, tool_name, tool_input=None, tool_response=None,
-             session="s1", raw_stdin=None, event="PostToolUse"):
+             session="s1", raw_stdin=None, event="PostToolUse", agent_id=None, **fields):
     payload = {"session_id": session, "hook_event_name": event, "tool_name": tool_name,
                "tool_input": tool_input or {}, "tool_response": tool_response or {}}
-    env = dict(os.environ, HARDMODE_STATE_DIR=str(state_dir))
+    if agent_id:
+        payload["agent_id"] = agent_id
+    payload.update(fields)
     return subprocess.run(
         [sys.executable, str(HOOK)],
         input=raw_stdin if raw_stdin is not None else json.dumps(payload),
-        capture_output=True, text=True, timeout=30, env=env,
+        capture_output=True, text=True, timeout=30, env=base_env(state_dir),
     )
 
 
@@ -36,8 +45,12 @@ def fail_bash(state_dir, cmd, **kw):
 
 def fail_event(state_dir, cmd, **kw):
     # Real 2.1.x shape: a dedicated PostToolUseFailure event with NO exit code.
-    return run_hook(state_dir, "Bash", {"command": cmd}, {},
-                    event="PostToolUseFailure", **kw)
+    return run_hook(state_dir, "Bash", {"command": cmd}, {}, event="PostToolUseFailure", **kw)
+
+
+def edit_attempt(state_dir, file_path, old_string, **kw):
+    return run_hook(state_dir, "Edit", {"file_path": file_path, "old_string": old_string,
+                                        "new_string": "x"}, {}, event="PreToolUse", **kw)
 
 
 def test_third_identical_failure_nudges(tmp_path):
@@ -58,7 +71,7 @@ def test_success_resets_count(tmp_path):
     fail_bash(tmp_path, "pytest -q")
     fail_bash(tmp_path, "pytest -q")
     run_hook(tmp_path, "Bash", {"command": "pytest -q"}, {"exit_code": 0})
-    assert fail_bash(tmp_path, "pytest -q").returncode == 0  # count restarted at 1
+    assert fail_bash(tmp_path, "pytest -q").returncode == 0
 
 
 def test_file_edit_resets_all_counts(tmp_path):
@@ -76,7 +89,6 @@ def test_bash_write_resets_counts(tmp_path):
 
 
 def test_interleaved_reads_do_not_reset(tmp_path):
-    # The classic grind: run check, read code, run check, read code, run check.
     fail_bash(tmp_path, "pytest -q")
     run_hook(tmp_path, "Bash", {"command": "cat src/parser.py"}, {"exit_code": 0})
     fail_bash(tmp_path, "pytest -q")
@@ -86,15 +98,13 @@ def test_interleaved_reads_do_not_reset(tmp_path):
 
 def test_unknown_exit_code_never_counts(tmp_path):
     for _ in range(4):
-        r = run_hook(tmp_path, "Bash", {"command": "pytest -q"}, {"stdout": "boom"})
-        assert r.returncode == 0
+        assert run_hook(tmp_path, "Bash", {"command": "pytest -q"}, {"stdout": "boom"}).returncode == 0
 
 
 def test_is_error_counts_as_failure(tmp_path):
     for _ in range(2):
         run_hook(tmp_path, "Bash", {"command": "npm test"}, {"is_error": True})
-    r = run_hook(tmp_path, "Bash", {"command": "npm test"}, {"is_error": True})
-    assert r.returncode == 2
+    assert run_hook(tmp_path, "Bash", {"command": "npm test"}, {"is_error": True}).returncode == 2
 
 
 def test_sessions_are_isolated(tmp_path):
@@ -103,60 +113,59 @@ def test_sessions_are_isolated(tmp_path):
     assert fail_bash(tmp_path, "pytest -q", session="b").returncode == 0
 
 
+def test_subagents_do_not_share_the_parent_counter(tmp_path):
+    # Subagents carry the parent's session_id plus their own agent_id; a parallel
+    # agent's failures must not push the main thread (or a sibling) over the threshold.
+    fail_event(tmp_path, "pytest -q", agent_id="agent-a")
+    fail_event(tmp_path, "pytest -q", agent_id="agent-a")
+    assert fail_event(tmp_path, "pytest -q").returncode == 0
+    assert fail_event(tmp_path, "pytest -q", agent_id="agent-b").returncode == 0
+    assert fail_event(tmp_path, "pytest -q", agent_id="agent-a").returncode == 2
+
+
 def test_threshold_env_lowers_trip_point(tmp_path):
-    # A smaller/grindier driver can lower the trip point via HARDMODE_LOOP_THRESHOLD=2.
-    env = {"HARDMODE_LOOP_THRESHOLD": "2"}
-    payload = {"session_id": "s1", "tool_name": "Bash",
-               "tool_input": {"command": "pytest -q"}, "tool_response": {"exit_code": 1}}
-    full_env = dict(os.environ, HARDMODE_STATE_DIR=str(tmp_path), **env)
+    payload = {"session_id": "s1", "tool_name": "Bash", "hook_event_name": "PostToolUseFailure",
+               "tool_input": {"command": "pytest -q"}, "tool_response": {}}
+    env = base_env(tmp_path, HARDMODE_LOOP_THRESHOLD="2")
     first = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
-                           capture_output=True, text=True, timeout=30, env=full_env)
+                           capture_output=True, text=True, timeout=30, env=env)
     assert first.returncode == 0
     second = subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
-                            capture_output=True, text=True, timeout=30, env=full_env)
+                            capture_output=True, text=True, timeout=30, env=env)
     assert second.returncode == 2
     assert "LOOP ALARM" in second.stderr
 
 
 def test_threshold_env_invalid_or_out_of_range_falls_back(tmp_path):
     for i, bad in enumerate(("banana", "1", "0", "99", "")):
-        env = dict(os.environ, HARDMODE_STATE_DIR=str(tmp_path / f"state-{i}"),
-                   HARDMODE_LOOP_THRESHOLD=bad)
-        payload = {"session_id": "s1", "tool_name": "Bash",
-                   "tool_input": {"command": "make check"}, "tool_response": {"exit_code": 1}}
+        env = base_env(tmp_path / f"state-{i}", HARDMODE_LOOP_THRESHOLD=bad)
+        payload = {"session_id": "s1", "tool_name": "Bash", "hook_event_name": "PostToolUseFailure",
+                   "tool_input": {"command": "make check"}, "tool_response": {}}
         results = [subprocess.run([sys.executable, str(HOOK)], input=json.dumps(payload),
                                   capture_output=True, text=True, timeout=30, env=env)
                    for _ in range(3)]
-        # falls back to the default of 3: silent, silent, nudge
         assert [r.returncode for r in results] == [0, 0, 2], bad
 
 
 def test_whitespace_variants_count_as_same_command(tmp_path):
-    # "pytest  -q" and "pytest -q" are the same grind; normalization must merge them.
     fail_bash(tmp_path, "pytest -q")
     fail_bash(tmp_path, "pytest    -q")
-    r = fail_bash(tmp_path, "pytest \t -q")
-    assert r.returncode == 2
+    assert fail_bash(tmp_path, "pytest \t -q").returncode == 2
 
 
 def test_different_commands_tracked_independently(tmp_path):
     fail_bash(tmp_path, "pytest -q")
     fail_bash(tmp_path, "npm test")
     fail_bash(tmp_path, "pytest -q")
-    assert fail_bash(tmp_path, "npm test").returncode == 0  # only 2 failures each... one more:
-    assert fail_bash(tmp_path, "pytest -q").returncode == 2  # pytest reaches 3 first
+    assert fail_bash(tmp_path, "npm test").returncode == 0
+    assert fail_bash(tmp_path, "pytest -q").returncode == 2
 
 
 def test_malformed_stdin_fails_open(tmp_path):
-    r = run_hook(tmp_path, "Bash", raw_stdin="not json")
-    assert r.returncode == 0
+    assert run_hook(tmp_path, "Bash", raw_stdin="not json").returncode == 0
 
 
 # ---- real Claude Code 2.1.x event model (PostToolUseFailure, no exit code) ----
-# THESIS: under the shipped event model a failing Bash command fires
-# PostToolUseFailure with no exit-code field, and the alarm must still trip on the
-# Nth failure. Before this fix the hook keyed on tool_response.exit_code — a field
-# 2.1.x never sends — so it was deterministically inert. These tests are the proof.
 
 def test_failure_event_without_exit_code_still_nudges(tmp_path):
     assert fail_event(tmp_path, "pytest -q").returncode == 0
@@ -167,20 +176,16 @@ def test_failure_event_without_exit_code_still_nudges(tmp_path):
 
 
 def test_failing_write_command_accumulates(tmp_path):
-    # CONF0 regression: a failing command that redirects to a file (make test >
-    # build.log) used to be read as a legitimizing "file write" and cleared its own
-    # count every run, so it never tripped. On the failure event it must accumulate.
     assert fail_event(tmp_path, "make test > build.log").returncode == 0
     assert fail_event(tmp_path, "make test > build.log").returncode == 0
     assert fail_event(tmp_path, "make test > build.log").returncode == 2
 
 
 def test_successful_postuse_event_resets_without_exit_code(tmp_path):
-    # A success now arrives as PostToolUse with no exit code; it must reset the count.
     fail_event(tmp_path, "pytest -q")
     fail_event(tmp_path, "pytest -q")
     run_hook(tmp_path, "Bash", {"command": "pytest -q"}, {}, event="PostToolUse")
-    assert fail_event(tmp_path, "pytest -q").returncode == 0  # restarted at 1
+    assert fail_event(tmp_path, "pytest -q").returncode == 0
 
 
 def test_successful_edit_event_resets_all_counts(tmp_path):
@@ -191,49 +196,146 @@ def test_successful_edit_event_resets_all_counts(tmp_path):
 
 
 def test_loop_reset_excludes_diagnostic_redirects(tmp_path):
-    # The reset trigger must NOT fire on a bare redirect / tee (the model's normal
-    # mid-grind "pipe the failing check to a log" move) — that wipe defeated the alarm.
-    # It MUST fire on real source mutations (sed -i, Set-Content, mv/cp/patch).
     alarm = _load("posttool-loop-alarm.py")
     gate = _load("stop-claim-audit.py")
     for benign in ("pytest -q 2>&1 | tee out.log", "pytest -q > out.log",
                    "make test >> build.log", "cat x.py"):
         assert not alarm.LOOP_RESET.search(benign), benign
-    for mutation in ("sed -i 's/a/b/' x.py", "mv a.py b.py", "cp a.py b.py",
-                     "Set-Content -Path x.py -Value 'fix'", "patch < d.diff"):
+    for mutation in ("sed -i 's/a/b/' x.py", "mv a.py b.py", "cp a.py b.py", "patch < d.diff"):
         assert alarm.LOOP_RESET.search(mutation), mutation
-    # MODIFYING_TOOLS still agrees with the claim-audit gate (tool-based reset).
     assert alarm.MODIFYING_TOOLS == gate.MODIFYING_TOOLS
 
 
 def test_succeeding_tee_does_not_reset_grind_counter(tmp_path):
-    # End-to-end proof of the closed hole: two failures, then a SUCCEEDING tee-to-log,
-    # then a third failure must still trip — the diagnostic redirect must not reset.
     fail_event(tmp_path, "pytest -q")
     fail_event(tmp_path, "pytest -q")
-    run_hook(tmp_path, "Bash", {"command": "pytest -q 2>&1 | tee out.log"}, {},
-             event="PostToolUse")
+    run_hook(tmp_path, "Bash", {"command": "pytest -q 2>&1 | tee out.log"}, {}, event="PostToolUse")
     assert fail_event(tmp_path, "pytest -q").returncode == 2
 
-def test_powershell_grind_is_tracked(tmp_path):
-    # Native-Windows sessions drive PowerShell as the primary shell; the alarm
-    # must count its failures exactly like Bash ones (the Windows snippets wire
-    # PostToolUseFailure to Bash|PowerShell).
-    for _ in range(2):
-        assert run_hook(tmp_path, "PowerShell", {"command": "python -m pytest -q"},
-                        {}, event="PostToolUseFailure").returncode == 0
-    r = run_hook(tmp_path, "PowerShell", {"command": "python -m pytest -q"},
-                 {}, event="PostToolUseFailure")
+
+def test_user_interrupt_is_not_a_failure(tmp_path):
+    for _ in range(4):
+        r = fail_event(tmp_path, "pytest -q", is_interrupt=True)
+        assert r.returncode == 0
+    assert fail_event(tmp_path, "pytest -q").returncode == 0   # count starts at 1 now
+
+
+# ---- the Edit grind (PreToolUse) ----
+
+def test_third_identical_edit_is_denied_with_a_nudge(tmp_path):
+    assert edit_attempt(tmp_path, "/w/x.py", "def foo():").returncode == 0
+    assert edit_attempt(tmp_path, "/w/x.py", "def foo():").returncode == 0
+    r = edit_attempt(tmp_path, "/w/x.py", "def foo():")
     assert r.returncode == 2
-    assert "LOOP ALARM" in r.stderr
+    assert "LOOP ALARM" in r.stderr and "old_string" in r.stderr
 
 
-def test_powershell_write_success_resets_counts(tmp_path):
+def test_different_edits_are_not_a_grind(tmp_path):
+    assert edit_attempt(tmp_path, "/w/x.py", "def foo():").returncode == 0
+    assert edit_attempt(tmp_path, "/w/x.py", "def bar():").returncode == 0
+    assert edit_attempt(tmp_path, "/w/y.py", "def foo():").returncode == 0
+    assert edit_attempt(tmp_path, "/w/x.py", "def foo():").returncode == 0
+
+
+def test_successful_edit_clears_the_edit_grind(tmp_path):
+    edit_attempt(tmp_path, "/w/x.py", "def foo():")
+    edit_attempt(tmp_path, "/w/x.py", "def foo():")
+    run_hook(tmp_path, "Edit", {"file_path": "/w/x.py", "old_string": "def foo():"}, {},
+             event="PostToolUse")
+    assert edit_attempt(tmp_path, "/w/x.py", "def foo():").returncode == 0
+
+
+def test_runtime_edit_failures_are_not_double_counted(tmp_path):
+    # Every Edit attempt is counted once, at PreToolUse. A stale-read failure that then
+    # fires PostToolUseFailure for the same attempt must NOT count again — otherwise two
+    # attempts would already trip a threshold of three.
+    payload = {"file_path": "/w/x.py", "old_string": "a", "new_string": "b"}
     for _ in range(2):
-        run_hook(tmp_path, "PowerShell", {"command": "python -m pytest -q"},
-                 {}, event="PostToolUseFailure")
-    # A succeeding PowerShell write cmdlet counts as a successful modification.
-    run_hook(tmp_path, "PowerShell", {"command": "Set-Content -Path x.py -Value 'fix'"})
-    for _ in range(2):
-        assert run_hook(tmp_path, "PowerShell", {"command": "python -m pytest -q"},
-                        {}, event="PostToolUseFailure").returncode == 0
+        assert edit_attempt(tmp_path, "/w/x.py", "a").returncode == 0
+        assert run_hook(tmp_path, "Edit", payload, {}, event="PostToolUseFailure",
+                        error="File content has changed since it was last read").returncode == 0
+    assert edit_attempt(tmp_path, "/w/x.py", "a").returncode == 2      # 3rd attempt, not 5th
+    # failures that were never attempted through PreToolUse do not count at all
+    for _ in range(3):
+        assert run_hook(tmp_path, "Edit", {**payload, "old_string": "q"}, {}, event="PostToolUseFailure",
+                        error="x").returncode == 0
+    assert edit_attempt(tmp_path, "/w/x.py", "q").returncode == 0
+
+
+def test_other_pretooluse_events_are_ignored(tmp_path):
+    for _ in range(5):
+        assert run_hook(tmp_path, "Bash", {"command": "pytest -q"}, {}, event="PreToolUse").returncode == 0
+        assert run_hook(tmp_path, "Write", {"file_path": "/w/x.py", "content": "x"}, {},
+                        event="PreToolUse").returncode == 0
+
+
+# ---- state hygiene ----
+
+def test_state_stores_hashes_not_command_text(tmp_path):
+    fail_event(tmp_path, "curl -u admin:hunter2 https://internal.example.com/x")
+    state = json.loads((tmp_path / "loop-alarm-s1.json").read_text(encoding="utf-8"))
+    dumped = json.dumps(state)
+    assert "hunter2" not in dumped and "internal.example.com" not in dumped
+    assert all(k.startswith(("sh:", "ed:", "wr:")) for k in state["counts"])
+
+
+def test_state_files_are_private(tmp_path):
+    fail_event(tmp_path, "pytest -q")
+    mode = (tmp_path / "loop-alarm-s1.json").stat().st_mode & 0o777
+    assert mode == 0o600
+
+
+def test_green_check_and_edit_counters_feed_the_preflight(tmp_path):
+    run_hook(tmp_path, "Edit", {"file_path": "x.py"}, {}, event="PostToolUse")
+    run_hook(tmp_path, "Edit", {"file_path": "y.py"}, {}, event="PostToolUse")
+    state = json.loads((tmp_path / "loop-alarm-s1.json").read_text(encoding="utf-8"))
+    assert state["edits"] == 2 and state["green_at"] == -1
+    run_hook(tmp_path, "Bash", {"command": "pytest -q"}, {}, event="PostToolUse")
+    state = json.loads((tmp_path / "loop-alarm-s1.json").read_text(encoding="utf-8"))
+    assert state["green_at"] == 2
+    run_hook(tmp_path, "Bash", {"command": "sed -i s/a/b/ z.py"}, {}, event="PostToolUse")
+    state = json.loads((tmp_path / "loop-alarm-s1.json").read_text(encoding="utf-8"))
+    assert state["edits"] == 3 and state["green_at"] == 2
+
+
+def test_nudge_is_written_to_the_ledger(tmp_path):
+    for _ in range(3):
+        fail_event(tmp_path, "pytest -q")
+    recs = [json.loads(ln) for ln in (tmp_path / "ledger-s1.jsonl").read_text().splitlines()]
+    assert any(r["hook"] == "loop-alarm" and r["outcome"] == "nudge" for r in recs)
+
+
+def _state(tmp_path, scope="s1"):
+    return json.loads((tmp_path / f"loop-alarm-{scope}.json").read_text())
+
+
+def test_a_check_that_reports_failure_is_not_green_even_if_it_exits_zero(tmp_path):
+    run_hook(tmp_path, "Write", {"file_path": "/w/x.py", "content": "x"}, {})
+    assert _state(tmp_path)["edits"] == 1 and _state(tmp_path).get("green_at", -1) in (-1, None)
+    run_hook(tmp_path, "Bash", {"command": "pytest -q || true"}, {"stdout": "1 failed, 3 passed", "stderr": ""})
+    assert _state(tmp_path).get("green_at", -1) in (-1, None)
+    run_hook(tmp_path, "Bash", {"command": "pytest -q 2>&1 | tail -3"}, {"stdout": "FAILED tests/test_x.py::t", "stderr": ""})
+    assert _state(tmp_path).get("green_at", -1) in (-1, None)
+    run_hook(tmp_path, "Bash", {"command": "pytest -q"}, {"stdout": "4 passed in 0.1s", "stderr": ""})
+    assert _state(tmp_path)["green_at"] == 1
+
+
+def test_only_a_runner_at_command_position_counts_as_a_check(tmp_path):
+    hm = _load("_hardmode.py")
+    for cmd in ("pytest -q", "cd x && pytest", "uv run pytest tests/", "python -m pytest", "npm test",
+                "make check", "./verify.sh", "sudo make test", "FOO=1 pytest", "echo a\npytest -q"):
+        assert hm.looks_like_test_run(cmd), cmd
+    for cmd in ("cat pytest.ini", "vim tests/test_x.py", "grep -n pytest README.md", "echo 'run pytest later'",
+                "ls pytest-results/", "git log --grep pytest", "pip install pytest"):
+        assert not hm.looks_like_test_run(cmd), cmd
+
+
+def test_loop_reset_verbs_are_matched_after_a_newline(tmp_path):
+    fail_event(tmp_path, "pytest -q")
+    fail_event(tmp_path, "pytest -q")
+    assert _state(tmp_path)["counts"]
+    run_hook(tmp_path, "Bash", {"command": "set -e\nsed -i 's/a/b/' f.py"}, {"stdout": "", "stderr": ""})
+    assert _state(tmp_path)["counts"] == {} and _state(tmp_path)["edits"] == 1
+    assert fail_event(tmp_path, "pytest -q").returncode == 0
+    assert fail_event(tmp_path, "pytest -q").returncode == 0
+    assert fail_event(tmp_path, "pytest -q").returncode == 2

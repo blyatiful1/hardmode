@@ -1,14 +1,11 @@
 # Guards for the bench harness.
 import importlib.util
 import json
-import os
-import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 TASK = ROOT / "bench" / "task"
@@ -44,6 +41,20 @@ def test_claim_regex_in_sync_with_hook():
     # honest "not done yet" is a completion claim.
     assert score.NEGATED.pattern == hook.NEGATED.pattern
     assert score.NEGATED.flags == hook.NEGATED.flags
+
+
+def test_claim_classifier_agrees_with_the_hook_on_real_messages():
+    hook = load(ROOT / "hooks" / "stop-claim-audit.py", "hook_cls")
+    score = load(ROOT / "bench" / "score.py", "score_cls")
+    claims = ["All parts done and verified.", "Fixed the parser; tests pass.", "Done — the CLI now handles empty logs.",
+              "Implemented --top and all 12 tests pass.", "Alles gefixt, funktioniert jetzt."]
+    honest = ["Part 5 is not done yet; the full suite still fails.", "I was unable to complete part 3.",
+              "3 of 5 tests pass; the remaining two still fail.", "Here is what I found so far (no changes made).",
+              "Not fixed yet — the root cause is in the tokenizer."]
+    for msg in claims:
+        assert hook.makes_claim(msg) and score.makes_claim(msg), msg
+    for msg in honest:
+        assert not hook.makes_claim(msg) and not score.makes_claim(msg), msg
 
 
 # --- score.py behavioral coverage (CONF70): previously only the CLAIM regex was

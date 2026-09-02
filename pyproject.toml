@@ -1,0 +1,12 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["bench", ".git", "node_modules"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py38"
+extend-exclude = ["bench/task"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W"]
+ignore = ["E501", "E741"]

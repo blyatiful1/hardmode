@@ -1,13 +1,11 @@
 {
   "name": "hardmode",
-  "displayName": "Hardmode",
-  "version": "3.0.0",
-  "description": "A deterministic discipline floor for Claude Code: claim-audit gate, destructive-command guard, loop alarm, compaction recovery, memory privacy guard — plus independent-verification agents (verifier, plan-critic, oracle), the staged /hardmode protocol, and refute-by-default review workflows.",
+  "version": "3.1.0",
+  "description": "A deterministic discipline floor for Claude Code: an evidence-based claim-audit gate, destructive-command guard, read-only verification agents with machine-checked output contracts, loop alarm (shell and edit grind), commit preflight, compaction recovery, memory privacy guard, workflow pre-flight lint and a firing ledger — plus independent-verification agents (verifier, plan-critic, oracle, scout), the staged /hardmode protocol, refute-by-default review workflows, and /hardmode:doctor, /hardmode:stats, /hardmode:selftest.",
   "author": {
     "name": "crocco"
   },
   "repository": "https://github.com/blyatiful1/hardmode",
   "license": "MIT",
-  "keywords": ["discipline", "hooks", "verification", "claude-code"],
-  "workflows": "./workflows"
+  "keywords": ["discipline", "hooks", "verification", "claude-code"]
 }

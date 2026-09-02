@@ -1,16 +1,21 @@
 export const meta = {
   name: 'bug-hunt',
   description: 'Loop-until-dry bug sweep over a codebase: rotating finder lenses hunt until 2 consecutive rounds surface nothing new, every fresh finding is adversarially verified',
-  whenToUse: 'Invoke as /bug-hunt [path or focus area] to hunt latent bugs in existing code (whole repo by default). For reviewing a fresh diff use /paranoid-review instead.',
+  whenToUse: 'Invoke as /hardmode:bug-hunt [path or focus area] to hunt latent bugs in existing code (whole repo by default). For reviewing a fresh diff use /hardmode:paranoid-review instead.',
   phases: [
     { title: 'Hunt', detail: 'rotating lenses, dedup against everything seen' },
     { title: 'Verify', detail: 'adversarial check of every fresh finding' },
   ],
 }
 
+const VERIFIER = 'hardmode:verifier'   // plugin agents are namespaced; a bare name throws
+const SCOUT = 'hardmode:scout'
+
 const scope = (typeof args === 'string' && args.trim())
   ? args.trim()
-  : 'the whole repository at the current working directory (skip vendored/generated code)'
+  : (args && typeof args === 'object' && typeof args.scope === 'string' && args.scope.trim())
+    ? args.scope.trim()
+    : 'the whole repository at the current working directory (skip vendored/generated code)'
 
 const BUGS = {
   type: 'object',
@@ -61,16 +66,16 @@ const seen = new Set()
 const confirmed = []
 const refuted = []
 const unverified = []
-// Key includes the line: two DIFFERENT bugs in the same file with similar titles
-// must not collide, or the second is silently dropped from verify + report (matches
-// paranoid-review.js's dedupKey, which includes f.line for the same reason).
-const key = b => `${b.file}:${b.line ?? ''}:${(b.title || '').toLowerCase().slice(0, 60)}`
+// Key includes the line (or, without one, a slice of the detail) AND the title: two
+// different bugs in one file with similar titles must not collide.
+const key = b => `${b.file}:${b.line ?? (b.detail || '').toLowerCase().slice(0, 40)}:${(b.title || '').toLowerCase().slice(0, 60)}`
 
 let dry = 0
 let stoppedForBudget = false
-// A dead hunter is not a passing check: count every null lens invocation so partial
-// (not just whole-round) deaths stay VISIBLE in the returned object, not only in logs.
+// A dead hunter is not a passing check: EVERY null lens invocation is tallied — before
+// any early-continue, so a fully dead round is visible in the returned object too.
 let deadHunterInvocations = 0
+let deadRounds = 0
 const deadLenses = new Set()
 for (let round = 0; round < MAX_ROUNDS && dry < 2; round++) {
   if (budget.total && budget.remaining() < 40_000) { log('token budget nearly spent — stopping early'); stoppedForBudget = true; break }
@@ -84,22 +89,17 @@ for (let round = 0; round < MAX_ROUNDS && dry < 2; round++) {
       `Hunt for real bugs in ${scope}. Your lens: ${name} — ${focus}.
 Read the code deeply; report EVERY real defect you find regardless of severity — a separate verification step filters, you do not. No style nits, no hypotheticals without a triggering input.
 ${alreadyFound ? `Already found (do NOT re-report these): ${alreadyFound}` : ''}`,
-      { label: `hunt:${name}:r${round + 1}`, phase: 'Hunt', schema: BUGS, model: 'opus' }
+      { label: `hunt:${name}:r${round + 1}`, phase: 'Hunt', schema: BUGS, model: 'opus', agentType: SCOUT }
     )
   ))
-  // A round of dead hunters is not a clean round — a dead subagent is not a passing check.
-  if (results.every(r => r == null)) { log(`round ${round + 1}: ALL hunters died — round does not count as dry`); continue }
-  // A PARTIAL death (some lenses null) silently loses that lens's coverage for the round;
-  // record which lenses died so it is not swallowed (visible in the returned object).
   results.forEach((r, i) => { if (r == null) { deadHunterInvocations++; deadLenses.add(roundLenses[i][0]) } })
+  if (results.every(r => r == null)) { deadRounds++; log(`round ${round + 1}: ALL hunters died — round does not count as dry`); continue }
   const deadThisRound = results.filter(r => r == null).length
   if (deadThisRound) log(`round ${round + 1}: ${deadThisRound} of ${results.length} hunter lens(es) died — their coverage this round is missing`)
-  const found = results.filter(Boolean).flatMap(r => r.bugs)
+  const found = results.filter(Boolean).flatMap(r => r.bugs ?? [])
 
-  // Dedup ATOMICALLY (filter + add in one pass), or two lenses reporting the same
-  // defect in this SAME round both pass the filter — spawning two verifiers for one bug
-  // and double-counting it. `seen.add` returns the Set (truthy), so it never drops a
-  // genuinely-fresh finding.
+  // Dedup ATOMICALLY (filter + add in one pass) so two lenses reporting the same
+  // defect in this SAME round cannot both pass.
   const fresh = found.filter(b => !seen.has(key(b)) && seen.add(key(b)))
   if (!fresh.length) { dry++; log(`round ${round + 1}: nothing new (dry ${dry}/2)`); continue }
   dry = 0
@@ -111,10 +111,8 @@ ${alreadyFound ? `Already found (do NOT re-report these): ${alreadyFound}` : ''}
       `Adversarially verify one bug report in the repository at the current working directory. Try to REFUTE it: read the code around it and, where cheap, run it with the claimed triggering input.
 Bug (${b.severity}) in ${b.file}${b.line ? ':' + b.line : ''}: ${b.title} — ${b.detail}
 verdict=confirmed only if the code demonstrably has this defect; refuted if it is speculative or already handled; unverifiable if you genuinely cannot determine either way.`,
-      // Independent verification: read-only `verifier` agentType, opus/xhigh, pinned
-      // off the driver (never inherited).
       { label: `verify:${(b.file || '').split('/').pop()}`, phase: 'Verify', schema: VERDICT,
-        model: 'opus', effort: 'xhigh', agentType: 'verifier' }
+        model: 'opus', effort: 'xhigh', agentType: VERIFIER }
     ).then(v => ({ ...b, verdict: v }))
   ))
   judged.forEach((j, idx) => {
@@ -124,20 +122,20 @@ verdict=confirmed only if the code demonstrably has this defect; refuted if it i
   })
 }
 
-// Distinguish WHY the hunt stopped: only claim the round cap when it was actually
-// reached, not when we broke out early on budget (CONF17).
 if (stoppedForBudget) log('hunt stopped early on token budget before exhaustion — coverage is NOT exhaustive')
 else if (dry < 2) log(`round cap (${MAX_ROUNDS}) reached while the hunt was still surfacing new findings — coverage is NOT exhaustive`)
 const SEVERITY_RANK = { critical: 0, major: 1, minor: 2 }
 const bySeverity = (a, b) => (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3)
-log(`done: ${confirmed.length} confirmed, ${refuted.length} refuted, ${unverified.length} unverified (${seen.size} total found)`)
+log(`done: ${confirmed.length} confirmed, ${refuted.length} refuted, ${unverified.length} unverified (${seen.size} total found)`
+  + (deadLenses.size ? ` — coverage lost for lenses: ${[...deadLenses].join(', ')}` : ''))
 return {
   confirmed: confirmed.sort(bySeverity).map(({ verdict, ...b }) => ({ ...b, evidence: verdict.reason })),
   refuted: refuted.map(({ verdict, ...b }) => ({ ...b, refutation: verdict.reason })),
   unverified: unverified.sort(bySeverity).map(({ verdict, ...b }) => ({ ...b, note: verdict?.reason ?? 'verifier did not return' })),
   totalFound: seen.size,
-  // Three-way honesty: a dead hunter is not a clean sweep. Non-empty deadLenses means
-  // some lens's coverage was lost and the "done" line above overstates completeness.
+  // Three-way honesty: a dead hunter is not a clean sweep.
   deadHunterInvocations,
+  deadRounds,
   deadLenses: [...deadLenses],
+  exhaustive: !stoppedForBudget && dry >= 2 && deadLenses.size === 0,
 }

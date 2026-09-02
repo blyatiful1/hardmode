@@ -1,5 +1,96 @@
 # Changelog
 
+## v3.1 — 2026-09-02 — the kit turned on itself, against the real harness
+
+Driven by a 46-agent research audit (four Opus workflows, ~4.4M tokens) that verified
+every hook contract against the **installed Claude Code 2.1.258 binary** by running it
+with dumping hooks — and found that the JS bundle on the box was a stale 2.1.42. Fifteen
+of seventeen orchestrator hypotheses were confirmed or partially confirmed, 30 fresh
+findings survived adversarial verification, 0 were refuted. Everything below closes a
+confirmed defect or turns an advisory rule into enforcement grounded in a verified
+contract. Suite: 140 → 296 tests (every hook as a subprocess, the workflows under a stubbed runtime, the linter, the tools, the docs against the tree), demo 4/4 → 10/10, `claude plugin validate` clean. A second, adversarial review pass over the diff (28 agents across four lenses, every finding refute-verified) produced 54 findings — quoted arguments blanked out of the guard's view, `find | xargs rm` from `/`, `pytest || true` counted as green, a double-counted Edit, prune deleting the cross-session files, the linter's phase check silently passing — all closed before this release.
+
+### Fixed — the floor had holes
+- **Destructive guard:** `git clean --force`, `git checkout --force`, combined short flags
+  (`-qf`, `push -uf`) all passed — only the `-f` spelling was matched. `rm -rf .git`, the
+  repository root, and a directory holding uncommitted work (`rm -rf src/` with a modified
+  file inside) passed as "scoped deletes". `git push --delete`/`:branch`, `reflog expire
+  --expire=now`, `gc --prune=now`, `update-ref -d`, `worktree remove --force`, `shred`,
+  `find / -delete`, unmerged `branch -D` were never checked. `sudo bash -c "rm -rf /"` and
+  `/bin/bash -c` evaded the wrapper scan; a heredoc fed to `bash <<'EOF'` was blanked as
+  data; a mention of `<<'EOF'` inside a string blanked the rest of the command; `T=/ &&
+  rm -rf $T` was invisible; `--force-with-lease --force` was excused. False positives:
+  `git rm -r --cached .`, `git restore -S`, `rm -rf "$DIR"/*`, a comment mentioning
+  `reset --hard`, `git push --dry-run --force`, and a scoped `git checkout -- file` on an
+  unmodified file blocked because unrelated files were dirty. All closed, with tests.
+- **Claim gate:** never looked at whether a check ran or passed; blind to edits made by
+  subagents (separate transcripts); computed `modified` over the whole session so every
+  later read-only turn re-blocked; counted failed/denied edits as modifications; took the
+  last transcript *entry* with text instead of the last *message*; missed everyday
+  completion phrasings in both languages ("the fix is applied and the suite is green",
+  "gefixt", "läuft wieder") and honest partials ("two of twelve tests pass", "unable to
+  complete"); accused a `pytest tests/test_x.py > out.log` of editing tests. Rewritten
+  as the evidence gate (see docs/DESIGN.md).
+- **Loop alarm:** blind to a repeated identical failing Edit (an `old_string` mismatch
+  fires no post-tool event — counted at PreToolUse now, and denied on the third try);
+  counted a user interrupt (`is_interrupt`) as a failure; shared one counter across all
+  subagents of a session; stored command lines verbatim in world-readable state; raced
+  on parallel tool calls. Fixed; state is hashed, 0600, locked, per agent.
+- **Compaction:** only the first user message was saved — a later "CORRECTION: do NOT
+  touch the CLI" was lost; no git state was captured at compaction time. Now all later
+  user turns (newest kept), a git snapshot, a HEAD-moved warning on recovery, and the
+  summarizer is told what it may not paraphrase (PreCompact stdout = custom instructions).
+- **Privacy guard:** inert on every stock install — nothing seeded `privacy.toml`, the
+  shipped list was empty, it guarded `~/.claude/memory/` while auto-memory lives under
+  `projects/<slug>/memory/`, it honoured `CLAUDE_DIR` (a variable the harness never
+  sets) instead of `CLAUDE_CONFIG_DIR`, and it needed Python 3.11's tomllib. Now guards
+  both trees, ships secret-shaped defaults, falls back to the plugin's file, parses
+  without tomllib.
+- **Workflows:** `agentType: 'verifier'` threw at spawn time — plugin agents are
+  namespaced (`hardmode:verifier`); every Verify stage of paranoid-review and bug-hunt
+  was returning null. A fully dead hunter round was erased from bug-hunt's coverage
+  report; a finder that *threw* (budget ceiling) vanished from paranoid-review's
+  `unauditedDimensions`; deep-plan's bare synthesizer await discarded six results on a
+  budget throw; dedup keys collided when `line` was absent; `whenToUse` told the model
+  to type commands that do not exist (`/paranoid-review`).
+- **CLAUDE_DIR → CLAUDE_CONFIG_DIR** in every hook (legacy name kept as a fallback).
+- **PowerShell paths removed** from every hook and test: unreachable through the wiring,
+  green tests measuring dead code, contradicting the README's own "no Windows port".
+- **Docs vs code:** dangling references to `memdb`, `screen`, `ax`, the `ultraweb suite`,
+  `mem.py`, `docs/SUCCESSION.md`, `claude/hooks/...`, the deleted A/B harness in
+  bench/README.md, a "226-test suite" and a deleted weakening-alarm in bench/RESULTS.md,
+  a README demo transcript with lines the program never printed, "a green 4/4 proves the
+  floor still fires" (it proved the scripts, never the wiring), `claude plugin validate
+  ./hardmode` (validates only the marketplace file), a `--strict` flag cited as used.
+- **check-workflows.mjs** now validates agentType against the agent registry, phase
+  titles against `meta.phases`, schema shapes, meta purity, host globals, `new Date`
+  without parens, quote styles, regex literals, and reports exact line numbers.
+
+### Added — advisory rules that became enforcement
+- **Read-only verification agents** (`pretool-readonly-agent`): the harness puts
+  `agent_type` in subagent tool payloads, so tree writes by `verifier`, `plan-critic`,
+  `oracle` and the new `scout` are denied deterministically; scratch writes allowed.
+- **Agent output contracts** (`subagentstop-contract-gate`): a verdict without its
+  VERDICT/EVIDENCE/GAPS shape, or a CONFIRMED with no command run, is sent back once.
+- **Commit preflight** (`pretool-commit-preflight`): edits after the last passing check →
+  an `additionalContext` nudge on `git commit`/`push` (`HARDMODE_PREFLIGHT=block` to deny).
+- **Workflow pre-flight lint** (`pretool-workflow-lint`): the submitted script is linted
+  before any agent spawns.
+- **Firing ledger + session rollup + floor check** (`_hardmode.ledger`,
+  `sessionend-ledger-summary`, `sessionstart-floor-check`): every decision recorded, a
+  self-witness record per session, a self-test on harness change, the previous session's
+  firings relayed.
+- **`/hardmode:doctor`, `/hardmode:stats`, `/hardmode:selftest`** (commands/ +
+  tools/doctor.py, stats.py, demo.py) and **`tools/memcheck.py`** for the postmortem
+  skill's mechanical steps (`--where`, `--dupes`, `--privacy`).
+- **`/hardmode:increment`** workflow (slice → build → fresh-context verify → repair once
+  → gate) and the **`scout`** agent.
+- **`hooks/_hardmode.py`**: shared config-dir, state, ledger, lock, transcript helpers
+  and the `SHELL_WRITE`/`TEST_RUNNER` patterns the hooks share.
+- **CI:** block-scoped frontmatter check, ruff, `claude plugin validate` against
+  plugin.json / marketplace.json / agents / skills / commands with warnings fatal, a real
+  install smoke into a scratch config dir, `doctor --strict --demo`.
+
 ## v3.0 — 2026-08-30 — the premise inversion, and the rename to *hardmode*
 
 The founding premise died. fable-protocol was written 2026-07-02 as a succession package
