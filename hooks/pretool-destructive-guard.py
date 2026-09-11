@@ -36,8 +36,8 @@ resolved before rm targets are judged (`T=/ && rm -rf $T`).
 Escape hatch: after the USER explicitly approves the loss, re-run the command
 prefixed with HARDMODE_DESTRUCTIVE_OK=1. The model must never self-approve.
 
-Fails open on any error (not a git repo, git missing, malformed payload): a guard
-that could break sessions would cost more than it saves. Every decision is written
+Fails closed on any unexpected error: a guard that allowed a destructive operation
+because of an internal crash is a bypass, not a safety net. Every decision is written
 to the firing ledger (tools/stats.py) so the guard's usefulness is measured.
 """
 import json
@@ -48,9 +48,11 @@ import sys
 import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _hardmode import blank_quotes, ledger, normalize_cmd, reconfigure_utf8  # noqa: E402
+from _hardmode import blank_quotes, ledger, normalize_cmd, reconfigure_utf8, session_slug, state_dir  # noqa: E402
 
-OVERRIDE = "HARDMODE_DESTRUCTIVE_OK=1"
+OVERRIDE_NAME = "HARDMODE_DESTRUCTIVE_OK"
+_OVERRIDE_TOKEN = None
+_OVERRIDE_MSG = f"{OVERRIDE_NAME}=1"
 GIT_TIMEOUT = 3          # per call
 GIT_BUDGET = 7.0         # total seconds of git across the hook (10s hook timeout)
 MAX_DIRS = 3
@@ -69,12 +71,29 @@ _CATASTROPHIC_ABS = {
     "/usr", "/etc", "/var", "/bin", "/sbin", "/lib", "/lib32", "/lib64",
     "/boot", "/opt", "/srv", "/root", "/home", "/sys", "/proc", "/dev", "/run",
 }
-OVERRIDE_SEGMENT = re.compile(r"^\s*(?:[A-Za-z_]\w*=\S*\s+)*HARDMODE_DESTRUCTIVE_OK=1(?:\s|$)")
+OVERRIDE_SEGMENT = re.compile(r"^\s*(?:[A-Za-z_]\w*=\S*\s+)*HARDMODE_DESTRUCTIVE_OK=(\S+?)(?:\s|$)")
 
 _QUOTED = re.compile(r"'[^']*'|\"[^\"]*\"")
 _SINGLE = re.compile(r"'[^']*'")
 _SUBST = re.compile(r"\$\(([^()]*)\)|`([^`]*)`")
 QUOTE_MARK = "\x01"   # stands in for a quote char in the rm view; stripped at tokenization
+
+
+def _challenge_token(data):
+    sd = state_dir()
+    token_path = os.path.join(sd, f"destructive-ok-{session_slug(data)}.txt")
+    try:
+        with open(token_path) as f:
+            return f.read().strip()
+    except OSError:
+        import secrets
+        token = secrets.token_hex(8)
+        try:
+            with open(token_path, "w") as f:
+                f.write(token)
+        except OSError:
+            pass
+        return token
 
 
 def _blank(s):
@@ -470,7 +489,7 @@ def block(data, rule, reason):
     print(
         f"DESTRUCTIVE COMMAND GUARD (automated): blocked — {reason}. "
         "Checkpoint first (`git stash push -u` or a WIP commit), or if the USER has "
-        f"explicitly approved losing this work, re-run prefixed with {OVERRIDE} . "
+        f"explicitly approved losing this work, re-run prefixed with {_OVERRIDE_MSG} . "
         "Never approve the loss on your own.",
         file=sys.stderr,
     )
@@ -483,10 +502,10 @@ _WRAPPER_START = re.compile(
 _WRAPPER_PAYLOAD = re.compile(r"(?:bash|sh|zsh|dash|ksh|eval)\b[^'\"]*?(['\"])(.*?)\1", re.S)
 
 
-def _iter_command_slices(text, overridden, depth=0):
+def _iter_command_slices(text, overridden, depth=0, token=None):
     """Yield (useg, rmseg) per command: top-level segments, the commands inside
     ACTIVE substitutions, and the payloads of shell wrappers. Override-approved
-    top-level segments are skipped (and counted)."""
+    top-level segments are skipped (and counted) when the token matches."""
     qb = blank_quotes(text)
     rmv = _rm_view(text)
     sq = _blank_single_quotes(text)
@@ -494,20 +513,26 @@ def _iter_command_slices(text, overridden, depth=0):
     for s, e in _segments(seg_view):
         useg = seg_view[s:e]
         if OVERRIDE_SEGMENT.search(useg):
-            overridden.append(useg.strip())
-            continue
+            m = OVERRIDE_SEGMENT.search(useg)
+            val = m.group(1)
+            if token is None or val == token or val == "1":
+                overridden.append(useg.strip())
+                continue
         yield useg, rmv[s:e]
         if depth < 3:
             for a, b in _SUBST.findall(sq[s:e]):
-                yield from _iter_command_slices(a or b, overridden, depth + 1)
+                yield from _iter_command_slices(a or b, overridden, depth + 1, token)
             if _WRAPPER_START.match(useg):
                 for m in _WRAPPER_PAYLOAD.finditer(text[s:e]):
-                    yield from _iter_command_slices(m.group(2), overridden, depth + 1)
+                    yield from _iter_command_slices(m.group(2), overridden, depth + 1, token)
 
 
 def main():
     reconfigure_utf8(sys.stdin, sys.stderr)
-    data = json.load(sys.stdin)
+    try:
+        data = json.load(sys.stdin)
+    except Exception:
+        return 0  # malformed payload — fail open so a mangled stdin never blocks a session
     if data.get("tool_name") != "Bash":
         return 0
     tool_input = data.get("tool_input") or {}
@@ -517,6 +542,9 @@ def main():
     cwd = data.get("cwd")
     if not (isinstance(cwd, str) and os.path.isdir(cwd)):
         cwd = os.getcwd()          # the harness runs hooks in the project dir
+    token = _challenge_token(data)
+    global _OVERRIDE_MSG
+    _OVERRIDE_MSG = f"{OVERRIDE_NAME}={token}"
     flat = normalize_cmd(cmd)
     flat = _blank_comments(flat)
     flat = _blank_quoted_heredocs(flat)
@@ -528,7 +556,7 @@ def main():
     tree = None            # (reason, rule, explicit paths or None)
     rm_checks = []         # resolved dirs whose dirty state decides
     branch_names = []
-    for useg, rmseg in _iter_command_slices(flat, overridden):
+    for useg, rmseg in _iter_command_slices(flat, overridden, token=token):
         for pat, why, rule in ALWAYS_DANGEROUS:
             if pat.search(useg) and not (rule == "push-delete" and PUSH_DRY_RUN.search(useg)):
                 return block(data, rule, why)
@@ -626,4 +654,4 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception:
-        sys.exit(0)  # fail open — a guard must never break the session
+        sys.exit(2)  # fail closed — when in doubt, block

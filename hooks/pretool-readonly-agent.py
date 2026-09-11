@@ -81,7 +81,7 @@ def scratch_roots(data):
     roots = []
     for r in (data.get("scratchpad_dir"), tempfile.gettempdir(), "/tmp", "/dev", "/proc"):
         if isinstance(r, str) and r:
-            roots.append(os.path.normpath(r))
+            roots.append(os.path.realpath(r))
     return roots
 
 
@@ -92,7 +92,7 @@ def under_scratch(path, roots, cwd):
     p = os.path.expanduser(p)
     if not os.path.isabs(p):
         p = os.path.join(cwd or "", p)
-    p = os.path.normpath(p)
+    p = os.path.realpath(p)
     return any(p == r or p.startswith(r + os.sep) for r in roots)
 
 
