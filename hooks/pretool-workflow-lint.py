@@ -19,7 +19,7 @@ import sys
 import tempfile
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _hardmode import ledger, reconfigure_utf8  # noqa: E402
+from _hardmode import ledger, reconfigure_utf8, state_dir  # noqa: E402
 
 PLUGIN_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -38,15 +38,28 @@ def main():
     linter = os.path.join(root, "tools", "check-workflows.mjs")
     if not node or not os.path.isfile(linter):
         return 0
-    with tempfile.TemporaryDirectory(prefix="hardmode-wf-") as td:
+    d = state_dir()
+    td = tempfile.mkdtemp(prefix="hardmode-wf-", dir=d)
+    os.chmod(td, 0o700)
+    try:
         path = os.path.join(td, "inline-workflow.js")
-        with open(path, "w", encoding="utf-8") as f:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(script)
         try:
             p = subprocess.run([node, linter, "--script", path], capture_output=True,
                                text=True, timeout=20)
         except Exception:
             return 0
+    finally:
+        try:
+            os.unlink(path)
+        except OSError:
+            pass
+        try:
+            os.rmdir(td)
+        except OSError:
+            pass
     if p.returncode != 1:
         return 0      # 0 = clean; 2 = the linter itself crashed — never blame the script
     findings = "\n".join(ln for ln in (p.stderr + p.stdout).splitlines() if ln.strip())[:2000]

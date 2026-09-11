@@ -33,7 +33,7 @@ import re
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from _hardmode import (FAILURE_OUTPUT, iter_jsonl, ledger, looks_like_test_run,  # noqa: E402
+from _hardmode import (FAILURE_OUTPUT, iter_jsonl, ledger, locked, looks_like_test_run,  # noqa: E402
                        looks_like_write, read_json, reconfigure_utf8, session_slug,
                        state_dir, subagent_transcripts, write_json_atomic)
 
@@ -288,13 +288,14 @@ def decide(data):
     fp = _fp(code, boundary, mods[-1]["id"] if mods else "", after[-1]["id"] if after else "",
              len(turn))
     path = os.path.join(state_dir(), f"claim-gate-{session_slug(data)}.json")
-    state = read_json(path, {})
-    if state.get("turn") != boundary:
-        state = {"turn": boundary, "blocks": 0, "fp": ""}
-    if data.get("stop_hook_active") and (state.get("fp") == fp or state.get("blocks", 0) >= MAX_BLOCKS):
-        return 0, "", "pass", f"budget:{code}"
-    state.update({"fp": fp, "blocks": state.get("blocks", 0) + 1})
-    write_json_atomic(path, state)
+    with locked(path):
+        state = read_json(path, {})
+        if state.get("turn") != boundary:
+            state = {"turn": boundary, "blocks": 0, "fp": ""}
+        if data.get("stop_hook_active") and (state.get("fp") == fp or state.get("blocks", 0) >= MAX_BLOCKS):
+            return 0, "", "pass", f"budget:{code}"
+        state.update({"fp": fp, "blocks": state.get("blocks", 0) + 1})
+        write_json_atomic(path, state)
     msg = REASON.format(reason=reason) + (TEST_EDIT_ADDENDUM if modified_tests else "")
     return 2, msg, "block", code
 

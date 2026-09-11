@@ -27,6 +27,12 @@ from _hardmode import config_dir  # noqa: E402
 STOP = {"the", "a", "an", "of", "to", "in", "on", "for", "and", "or", "is", "it", "this", "that", "with",
         "when", "not", "be", "as", "by", "at", "from", "was", "are", "use", "using"}
 
+_PEM_PRIVATE_KEY = re.compile(
+    r"-----BEGIN (?:RSA |EC |DSA |ENCRYPTED |OPENSSH )?PRIVATE KEY-----\n"
+    r".*?\n-----END (?:RSA |EC |DSA |ENCRYPTED |OPENSSH )?PRIVATE KEY-----",
+    re.DOTALL,
+)
+
 
 def memory_root():
     return os.environ.get("CLAUDE_CODE_REMOTE_MEMORY_DIR") or config_dir()
@@ -134,6 +140,16 @@ def privacy(cwd):
                             if rx.search(ln):
                                 hits += 1
                                 print(f"{path}:{i}: matches {p!r}")
+            except OSError:
+                continue
+            try:
+                with open(path, encoding="utf-8", errors="replace") as f:
+                    content = f.read()
+                for m in _PEM_PRIVATE_KEY.finditer(content):
+                    hits += 1
+                    lineno = content[:m.start()].count("\n") + 1
+                    p = "PEM_PRIVATE_KEY_BLOCK"
+                    print(f"{path}:{lineno}: matches {p!r}")
             except OSError:
                 continue
     print(f"privacy sweep: {hits} hit(s) against {len(pats)} pattern(s) from {source}")

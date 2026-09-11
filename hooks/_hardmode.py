@@ -110,13 +110,14 @@ def write_json_atomic(path, obj):
 
 
 class locked:
-    """Advisory exclusive lock on <path>.lock (fcntl where available, else a no-op).
+    """Advisory exclusive lock on <path>.lock (fcntl where available, lock-file fallback).
     Concurrency-safe tool calls run in parallel, so a read-modify-write of a state
     file needs it or increments get lost."""
 
     def __init__(self, path):
         self.path = path + ".lock"
         self.fd = None
+        self._lockfile = False
 
     def __enter__(self):
         try:
@@ -125,15 +126,29 @@ class locked:
             fcntl.flock(self.fd, fcntl.LOCK_EX)
         except Exception:
             self.fd = None
+            # Fall back to atomic lock-file when fcntl is unavailable
+            for _ in range(10):
+                try:
+                    self.fd = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+                    self._lockfile = True
+                    break
+                except OSError:
+                    time.sleep(0.05)
         return self
 
     def __exit__(self, *exc):
         if self.fd is not None:
-            try:
-                import fcntl
-                fcntl.flock(self.fd, fcntl.LOCK_UN)
-            except Exception:
-                pass
+            if self._lockfile:
+                try:
+                    os.unlink(self.path)
+                except OSError:
+                    pass
+            else:
+                try:
+                    import fcntl
+                    fcntl.flock(self.fd, fcntl.LOCK_UN)
+                except Exception:
+                    pass
             try:
                 os.close(self.fd)
             except OSError:
@@ -188,19 +203,23 @@ def iter_jsonl(path):
 def subagent_transcripts(transcript_path, limit=200):
     """Transcripts of the subagents spawned from a session: the harness keeps them
     under <transcript stem>/subagents/**/agent-*.jsonl (Agent-tool and Workflow-tool
-    agents alike). Capped so a huge session cannot blow a hook's timeout."""
+    agents alike). Capped so a huge session cannot blow a hook's timeout. Symlinks are
+    resolved and verified against the boundary to prevent path traversal."""
     out = []
     try:
         stem = transcript_path[:-6] if transcript_path.endswith(".jsonl") else transcript_path
         root = os.path.join(stem, "subagents")
         if not os.path.isdir(root):
             return out
-        for dirpath, _dirs, files in os.walk(root):
+        root_real = os.path.realpath(root)
+        for dirpath, _dirs, files in os.walk(root, followlinks=False):
             for name in files:
                 if name.startswith("agent-") and name.endswith(".jsonl"):
-                    out.append(os.path.join(dirpath, name))
-                    if len(out) >= limit:
-                        return out
+                    p = os.path.join(dirpath, name)
+                    if os.path.realpath(p).startswith(root_real + os.sep):
+                        out.append(p)
+                        if len(out) >= limit:
+                            return out
     except OSError:
         pass
     return out
